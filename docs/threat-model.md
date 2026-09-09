@@ -92,3 +92,4 @@ GitHub ──► CodeConnections ──► CodePipeline ──► ECR/ECS
 | No WAF managed rule groups (cost) | API GW throttling deemed sufficient for capstone load | Meron | G5 |
 | Single AWS account (no org SCPs) | Provided account | Meron | G5 |
 | Daraja callback IP allow-list may be unavailable in sandbox | Compensate with `CheckoutRequestID` match + `stkQuery` cross-check | Nebyat | G5 |
+| **Repo is public** (free plan cannot enforce branch protection / CODEOWNERS on a private repo) | No secrets ever in Git — all in Secrets Manager; secret scanning + push protection on (default for public repos); git history audited clean at go-public. Move back to private once GitHub Education Pro / a Team org is available. | Meron | when Pro/org obtained |

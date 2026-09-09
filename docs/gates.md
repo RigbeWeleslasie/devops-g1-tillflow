@@ -16,14 +16,19 @@ Each gate passes with a PR + reproducible evidence. Blocked-if conditions are ha
 
 ### G0 remaining actions (not code)
 - [x] Real GitHub handles wired into `CODEOWNERS` + `docs/ownership.md`
-      (`@RigbeWeleslasie`, `@nebyathhailu`, `@meronkhasay`)
-- [ ] Add `@nebyathhailu` and `@meronkhasay` as repo collaborators
-- [ ] Make the GitHub repo **private**; add mentor with read/triage access
-- [ ] Enable branch protection on `main`: require PR, 1 review, require review from
-      Code Owners, require status checks, no direct pushes
+      (`@RigbeWeleslasie`, `@nebyathhailu`, `@meronkahsay`)
+- [x] `@nebyathhailu` and `@meronkahsay` added as repo collaborators
+- [x] Scaffold PR (#1) reviewed by @nebyathhailu and merged to `main`
+- [x] Repo made **public** — required to enforce branch protection + CODEOWNERS on a
+      free plan (private needs Pro/Team). Secret scanning + push protection are on by
+      default for public repos; no real secrets in history. Logged as a deviation from
+      the brief's "private" wording — pending GitHub Education / org move to restore private.
+- [x] Branch ruleset `main protection` on `main`: require PR + 1 approval + require
+      review from Code Owners + conversation resolution + block force-push/deletion
+- [ ] Add the mentor/trainer as a collaborator (Read if on org/Pro, else Write)
 - [ ] Confirm AWS account ID → note it for S3 bucket suffixes
 - [ ] Create the `prod` protected environment in GitHub (reviewers = platform DRI)
-- [ ] Open the `g0-decide` PR and get it reviewed/merged before D2
+- [ ] Apply for GitHub Education Pack to move the repo back to private with enforcement
 
 ## G1 — Platform (D5)
 Terraform plan/apply; naming + tag audit; ECS golden path, health, sidecar boot, first

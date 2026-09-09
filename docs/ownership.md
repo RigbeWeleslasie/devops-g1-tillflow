@@ -10,7 +10,7 @@
 | - | ------ | ------------------- | ------------------------- | ---------------------- |
 | 1 | Rigbe  | `@RigbeWeleslasie`  | Product + POS             | Payments + integrity   |
 | 2 | Nebyat | `@nebyathhailu`     | Payments + integrity      | Platform + delivery    |
-| 3 | Meron  | `@meronkhasay`      | Platform + delivery       | Product + POS          |
+| 3 | Meron  | `@meronkahsay`      | Platform + delivery       | Product + POS          |
 | 4 | Rigbe  | `@RigbeWeleslasie`  | Reliability + operations  | Payments + integrity   |
 
 Rigbe holds two primary areas (Product+POS and Reliability+operations) — permitted by
