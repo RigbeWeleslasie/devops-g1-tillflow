@@ -1,0 +1,41 @@
+name: Deploy (gated apply)
+
+# G0 scaffold. On main: gated terraform apply via OIDC, then hand off to CodePipeline
+# for per-service build -> scan -> ECR -> ECS -> post-deploy smoke -> rollback.
+# Lane owner: Meron (Platform + delivery).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: prod          # protected environment -> required reviewer gate
+    permissions:
+      id-token: write          # OIDC -> devops-g1-ci-deploy
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Configure AWS credentials (OIDC)
+        run: echo "TODO(G1): configure-aws-credentials role-to-assume devops-g1-ci-deploy"
+      - name: terraform init
+        run: echo "TODO(G1): terraform -chdir=infra init (S3 backend)"
+      - name: terraform apply (plan/apply parity with the PR plan)
+        run: echo "TODO(G1): terraform -chdir=infra apply the reviewed plan artifact"
+
+  smoke:
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post-deploy smoke
+        run: echo "TODO(G1): curl /health /ready /version for each service; assert SHA"

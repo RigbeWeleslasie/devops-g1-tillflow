@@ -1,0 +1,48 @@
+# --- Secrets / credentials (NEVER commit — Daraja sandbox keys, Slack webhook, DB creds) ---
+*.env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+aws.json
+secrets/
+
+# --- Terraform ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl.bak
+tfplan
+*.tfplan
+
+# --- Node / build ---
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.DS_Store
+
+# --- Python (if any service uses it) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- k6 ---
+k6/results/*.json
+!k6/results/.gitkeep
+
+# --- Local scratch ---
+.scratch/
+tmp/
