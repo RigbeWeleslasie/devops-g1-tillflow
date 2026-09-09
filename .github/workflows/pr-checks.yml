@@ -1,0 +1,96 @@
+name: PR checks
+
+# G0 scaffold. Real build/test/scan steps are wired in G1 once services have code.
+# Lane owner: Meron (Platform + delivery).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      pos: ${{ steps.filter.outputs.pos }}
+      payments: ${{ steps.filter.outputs.payments }}
+      commission: ${{ steps.filter.outputs.commission }}
+      shared: ${{ steps.filter.outputs.shared }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared: 'services/_shared/**'
+            web: [ 'services/web/**', 'services/_shared/**' ]
+            pos: [ 'services/pos/**', 'services/_shared/**' ]
+            payments: [ 'services/payments/**', 'services/_shared/**' ]
+            commission: [ 'services/commission/**', 'services/_shared/**' ]
+            infra: 'infra/**'
+
+  service-ci:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' || needs.changes.outputs.pos == 'true' || needs.changes.outputs.payments == 'true' || needs.changes.outputs.commission == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, pos, payments, commission]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip unchanged
+        run: |
+          changed='${{ toJSON(needs.changes.outputs) }}'
+          echo "changed=$changed"
+          # TODO(G1): if this service not in changed set -> exit 0
+      - name: Lint / typecheck
+        run: echo "TODO(G1): lint + typecheck ${{ matrix.service }}"
+      - name: Unit + integration tests (fake M-Pesa adapter)
+        run: echo "TODO(G1): tests with MPESA_ADAPTER=fake"
+      - name: Docker build (multi-stage, pinned base)
+        run: echo "TODO(G1): docker build, tag by \${{ github.sha }}"
+      - name: SBOM
+        run: echo "TODO(G1): syft -> sbom.spdx.json"
+      - name: Image scan (fail on fixable HIGH/CRITICAL)
+        run: echo "TODO(G1): trivy/grype image scan"
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Secret scan
+        run: echo "TODO(G1): gitleaks"
+      - name: Dependency scan
+        run: echo "TODO(G1): dependency audit"
+      - name: IaC scan
+        run: echo "TODO(G1): tfsec / checkov on infra/"
+
+  infra-plan:
+    needs: changes
+    if: ${{ needs.changes.outputs.infra == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Configure AWS credentials (OIDC)
+        run: echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-deploy"
+      - name: terraform fmt -check
+        run: terraform -chdir=infra fmt -check -recursive
+      - name: terraform init + validate
+        run: echo "TODO(G1): terraform -chdir=infra init && validate"
+      - name: terraform plan
+        run: echo "TODO(G1): terraform -chdir=infra plan -no-color -> PR comment"

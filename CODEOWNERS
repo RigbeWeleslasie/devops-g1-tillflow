@@ -1,0 +1,45 @@
+# CODEOWNERS — devops-g1 / TillFlow
+#
+# Ownership is carried here and in docs/ownership.md — NOT in resource names.
+# Each path has exactly one directly responsible engineer (DRI).
+#
+#   Rigbe   -> @RigbeWeleslasie   (repo owner; spelling taken from the git remote URL)
+#   Nebyat  -> @nebyathhailu
+#   Meron   -> @meronkhasay
+#
+# All three must be collaborators on the repo for these entries to resolve as
+# required reviewers under branch protection.
+
+# ----------------------------------------------------------------------------
+# Default owner — every file needs at least one owner
+* @RigbeWeleslasie @nebyathhailu @meronkhasay
+
+# ----------------------------------------------------------------------------
+# Product + POS            DRI: Rigbe (@RigbeWeleslasie)
+/services/web/            @RigbeWeleslasie
+/services/pos/            @RigbeWeleslasie
+/docs/adr/0007-*          @RigbeWeleslasie
+
+# ----------------------------------------------------------------------------
+# Payments + integrity     DRI: Nebyat (@nebyathhailu)
+/services/payments/       @nebyathhailu
+/services/commission/     @nebyathhailu
+/docs/adr/0005-*          @nebyathhailu
+/docs/adr/0006-*          @nebyathhailu
+
+# ----------------------------------------------------------------------------
+# Platform + delivery      DRI: Meron (@meronkhasay)
+/infra/                   @meronkhasay
+/.github/                 @meronkhasay
+/services/_shared/        @meronkhasay @nebyathhailu
+/docs/adr/0002-*          @meronkhasay
+/docs/adr/0003-*          @meronkhasay
+/docs/adr/0004-*          @meronkhasay
+
+# ----------------------------------------------------------------------------
+# Reliability + operations DRI: Rigbe (@RigbeWeleslasie)
+/k6/                      @RigbeWeleslasie
+/docs/slo-error-budgets.md   @RigbeWeleslasie
+/docs/runbook.md             @RigbeWeleslasie
+/docs/production-readiness.md @RigbeWeleslasie
+/evidence/reliability-ops/    @RigbeWeleslasie
