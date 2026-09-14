@@ -363,6 +363,15 @@ resource "aws_ecs_task_definition" "service" {
       # keeps serving traffic. Losing observability must not cause an outage.
       essential = false
 
+      # Golden path applies to every container, not just the app one: non-root,
+      # read-only rootfs. The collector's SSM-delivered config has no file-based
+      # receivers/exporters/queueing, so it has nothing to write to disk for.
+      # Because essential = false, a permission problem here degrades telemetry
+      # (or crash-loops just this container) rather than the task -- the safe
+      # side to fail on if this needs adjusting after a first real deploy.
+      user                   = "1000:1000"
+      readonlyRootFilesystem = true
+
       # Config comes from SSM so it can change without an image rebuild.
       secrets = [{
         name      = "AOT_CONFIG_CONTENT"

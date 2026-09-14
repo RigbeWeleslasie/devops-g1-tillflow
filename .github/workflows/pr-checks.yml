@@ -53,15 +53,15 @@ jobs:
           echo "changed=$changed"
           # TODO(G1): if this service not in changed set -> exit 0
       - name: Lint / typecheck
-        run: echo "TODO(G1): lint + typecheck ${{ matrix.service }}"
+        run: 'echo "TODO(G1): lint + typecheck ${{ matrix.service }}"'
       - name: Unit + integration tests (fake M-Pesa adapter)
-        run: echo "TODO(G1): tests with MPESA_ADAPTER=fake"
+        run: 'echo "TODO(G1): tests with MPESA_ADAPTER=fake"'
       - name: Docker build (multi-stage, pinned base)
-        run: echo "TODO(G1): docker build, tag by \${{ github.sha }}"
+        run: 'echo "TODO(G1): docker build, tag by \${{ github.sha }}"'
       - name: SBOM
-        run: echo "TODO(G1): syft -> sbom.spdx.json"
+        run: 'echo "TODO(G1): syft -> sbom.spdx.json"'
       - name: Image scan (fail on fixable HIGH/CRITICAL)
-        run: echo "TODO(G1): trivy/grype image scan"
+        run: 'echo "TODO(G1): trivy/grype image scan"'
 
   security:
     runs-on: ubuntu-latest
@@ -69,11 +69,11 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: Secret scan
-        run: echo "TODO(G1): gitleaks"
+        run: 'echo "TODO(G1): gitleaks"'
       - name: Dependency scan
-        run: echo "TODO(G1): dependency audit"
+        run: 'echo "TODO(G1): dependency audit"'
       - name: IaC scan
-        run: echo "TODO(G1): tfsec / checkov on infra/"
+        run: 'echo "TODO(G1): tfsec / checkov on infra/"'
 
   infra-plan:
     needs: changes
@@ -83,16 +83,27 @@ jobs:
       id-token: write   # OIDC
       contents: read
       pull-requests: write
+    # Shares a name with deploy.yml's `apply` job on purpose: both touch the
+    # same S3+DynamoDB state lock. The workflow-level `concurrency:` above is
+    # keyed per-PR, so two PRs' plans (or a PR's plan and main's apply) are
+    # NOT mutually exclusive by default and would race on that one lock the
+    # moment the TODO steps below become real terraform commands. This job-
+    # level group queues them instead (cancel-in-progress: false, matching
+    # deploy.yml -- cancelling a run mid-plan wouldn't cleanly release the
+    # lock anyway).
+    concurrency:
+      group: devops-g1-terraform-state
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
       - name: Configure AWS credentials (OIDC, read-only)
         # Assumes devops-g1-ci-plan, NOT devops-g1-ci-deploy: a pull_request run
         # must never hold write/apply credentials (infra/iam.tf).
-        run: echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-plan"
+        run: 'echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-plan"'
       - name: terraform fmt -check
         run: terraform -chdir=infra fmt -check -recursive
       - name: terraform init + validate
-        run: echo "TODO(G1): terraform -chdir=infra init && validate"
+        run: 'echo "TODO(G1): terraform -chdir=infra init && validate"'
       - name: terraform plan
-        run: echo "TODO(G1): terraform -chdir=infra plan -no-color -> PR comment"
+        run: 'echo "TODO(G1): terraform -chdir=infra plan -no-color -> PR comment"'

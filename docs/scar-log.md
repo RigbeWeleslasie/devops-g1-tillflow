@@ -18,6 +18,45 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-14 — Both GitHub Actions workflows have been invalid YAML since G0
+- **Area:** .github/workflows (pr-checks.yml, deploy.yml)
+- **What happened:** While cross-checking a different group's review findings against our
+  own repo, ran both workflow files through an actual YAML parser for the first time (never
+  done before -- `terraform fmt` doesn't touch YAML, and nothing else in our pipeline
+  lints it). Both failed to parse: `ScannerError: mapping values are not allowed here`.
+  Every `run: echo "TODO(G1): ..."` step (15 across both files) is a YAML **plain scalar**
+  containing an unescaped `: ` (colon-space) inside the quotes-that-aren't-YAML-quotes --
+  e.g. `run: echo "TODO(G1): lint + typecheck ${{ matrix.service }}"`. YAML treats the
+  double quotes there as just more plain-scalar characters (the value isn't YAML-quoted;
+  it starts with `echo`, not `"`), so the `: ` inside `"TODO(G1): ...` reads as a nested
+  mapping key/value separator, which is invalid where a scalar was already in progress.
+- **Impact:** Both workflows have been on `main` since the G0 scaffold merge (PR #1,
+  `deb8481`) and have been carried through every PR since, including today's. If GitHub's
+  own parser rejects the file the same way (near-certain -- this is a spec-level plain
+  scalar rule, not a PyYAML quirk), **every PR check and every `main` deploy this whole
+  session would have silently failed to run at all**, not failed a step -- the workflow
+  itself never starts. No PR in this repo has had its Actions checks actually inspected
+  yet, so this went unnoticed.
+- **Root cause:** Every one of these lines was written as `run: echo "..."` (unquoted at
+  the YAML level) under the assumption that the double quotes were doing the quoting.
+  They're shell quoting, not YAML quoting -- two different languages sharing one line.
+  Nothing in the G0 build process parsed the YAML to catch it: `terraform fmt` only
+  touches `.tf`, and no `yamllint`/`actionlint` step exists (that gap is itself part of
+  the still-open "no security/lint scans in CI" follow-up).
+- **Fix:** Wrapped the value in real YAML single quotes on all 15 lines --
+  `run: 'echo "TODO(G1): ..."'` -- which is unambiguous to the YAML parser regardless of
+  what's inside. `${{ }}` expression interpolation is a GitHub Actions templating pass
+  over the resolved string value, applied after YAML parsing, so this is a pure syntax fix
+  with no behavior change once the TODOs become real commands.
+- **Prevention:** Worth adding a YAML lint / `actionlint` step to CI itself once the
+  security-scan TODOs are filled in, so a future edit to these files can't silently
+  reintroduce this. Until then: **actually load-test workflow YAML** (a plain
+  `python -c "import yaml; yaml.safe_load(open(f))"` per file, or push a throwaway branch
+  and watch the Actions tab) before trusting a workflow file is real, not just readable.
+- **Owner:** Rigbe
+
+---
+
 ### 2026-09-14 — PR #4 review: the review-fixes PR had its own regressions
 - **Area:** infra (S3 log delivery, bootstrap bucket policy, ci-plan IAM)
 - **What happened:** The follow-up PR fixing PR #3's five findings introduced two things
