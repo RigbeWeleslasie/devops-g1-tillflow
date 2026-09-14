@@ -118,6 +118,37 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — API Gateway 503: a tls_config that AWS would not let go of
+- **Area:** infra (edge: API Gateway -> VPC Link -> internal ALB)
+- **What happened:** Every request through the public edge returned 503 while ECS
+  tasks and ALB targets were healthy and the ALB's `RequestCount` sat at 0 --
+  traffic never arrived. Roughly two hours of narrowing.
+- **Impact:** The golden path could not be demonstrated end to end; the pipeline's
+  post-deploy smoke test had nothing to pass against. No customer impact (pre-G2).
+- **Root cause:** Two faults stacked, which is why each fix only half-worked.
+  1. The VPC Link security group had an egress rule but **no ingress rule at
+     all**. Declaring the SG with no inline blocks drops the default allow-all
+     egress, and only egress was added back. Symptom: a silent 9s timeout with
+     an empty `integrationError`.
+  2. The real blocker: `tls_config { server_name_to_verify }` had been set on the
+     integration while the ALB still spoke HTTPS with a self-signed certificate.
+     After the listener moved to plain HTTP, Terraform planned the removal on
+     every run -- and **AWS silently ignored it**. `UpdateIntegration` will not
+     clear `tls_config`, so the attribute stayed, API Gateway kept trying to
+     validate a certificate on a plaintext listener, and the plan never
+     converged. `terraform plan` showing a change that "applies" cleanly and
+     then reappears is the tell.
+- **Fix:** Added the VPC Link ingress rule. Then replaced the integration **and**
+  the route together (`-replace` on both) -- deleting the integration alone fails
+  with a 409 because the route references it. `tls_config` is now null and the
+  full path works: `/pos/health` 200 through API Gateway.
+- **Prevention:** `terraform plan -detailed-exitcode` is the CI drift check; an
+  attribute that will not clear shows up as a plan that never reaches exit 0
+  rather than as a mystery. When a provider reports success but the plan does not
+  converge, verify against the API (`get-integrations`) instead of trusting the
+  apply.
+- **Owner:** Meron
+
 ### 2026-09-14 — State bucket policy denied Terraform's own state writes
 - **Area:** infra (Terraform remote state)
 - **What happened:** The first `terraform apply` of the VPC created 24 of 29 resources,

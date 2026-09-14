@@ -124,16 +124,29 @@ AWS_PROFILE=default terraform -chdir=infra plan
 
 ---
 
-## Known issue — public edge
+## Public edge — working end to end
 
-`API Gateway → VPC Link → internal ALB` returns 503 and the ALB's
-`RequestCount` stays 0, so traffic never arrives. Everything behind that hop is
-healthy: tasks running, targets healthy, `/health` `/ready` `/version` correct.
+```
+$ ./infra/scripts/deploy.sh pos
+digest  : sha256:5ce8952c84939380379c0e3355b5ff55ab4e3e78ee44d0e18e8c33f26faef9cf
+registered: arn:aws:ecs:us-east-1:240462142849:task-definition/devops-g1-pos:6
+smoking https://k0lzgyvn1i.execute-api.us-east-1.amazonaws.com/pos
 
-Ruled out by inspection: the SG chain on both sides (VPC Link ENIs confirmed
-carrying the expected SG), NACLs, subnet/AZ placement, integration URI and
-ConnectionId, listener rules, `payload_format_version` (1.0 is required for
-HTTP_PROXY — AWS rejects 2.0), and TLS. One real bug was found and fixed on the
-way: the VPC Link SG had no ingress rule at all.
+PASS  /health   {"status":"ok","service":"pos"}
+PASS  /ready    {"status":"ready","service":"pos"}
+PASS  /version  {"service":"pos","sha":"33a8a119b6481e18fea7baceb6338dc8e6cb0eb4",
+                 "digest":"sha256:5ce8952c8493...","environment":"prod"}
 
-Next step: curl the ALB from inside the VPC to isolate whether the ALB answers.
+SMOKE PASSED — pos
+DEPLOYED  pos  33a8a11  sha256:5ce8952c8493...
+```
+
+`/version` reports the commit **and** the immutable digest of the running image,
+read back through the public edge — the artifact-identity evidence the brief asks
+for. The smoke test asserts the returned SHA equals the commit that was built, so
+a deploy that silently left the old image running fails and rolls back.
+
+Getting here took two stacked faults, both written up in
+[`docs/scar-log.md`](../../docs/scar-log.md) (2026-09-15): a VPC Link security
+group with no ingress rule, and a `tls_config` that AWS would not let Terraform
+remove.
