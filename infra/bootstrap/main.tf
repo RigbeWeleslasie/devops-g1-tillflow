@@ -265,16 +265,27 @@ data "aws_iam_policy_document" "tfstate" {
   # policy alone leaves state readable/writable by any IAM identity in this
   # shared cohort account that happens to hold a generic s3:GetObject/
   # PutObject grant. This statement is what docs/threat-model.md's "restricted
-  # to CI + platform roles" claim actually depends on: NotPrincipal + Deny
-  # locks the bucket to local.allowed_state_principals, in addition to
-  # whatever each principal's own IAM policy already allows.
+  # to CI + platform roles" claim actually depends on.
+  #
+  # Deny + Condition(ArnNotEquals on aws:PrincipalArn), not NotPrincipal:
+  # AWS's own docs (IAM User Guide, "NotPrincipal") explicitly advise against
+  # NotPrincipal in new resource-based policies -- for an assumed-role caller,
+  # evaluation can check account, then role, then the assumed-role *session*
+  # (identified by session name), and NotPrincipal only reliably excludes an
+  # exact match, so a bare role ARN alone is not the documented-safe form
+  # there. aws:PrincipalArn does not have that problem: for a role session
+  # (AssumeRole or, as ci-deploy/ci-plan use, AssumeRoleWithWebIdentity), it
+  # is confirmed to hold the bare role ARN regardless of session name -- "the
+  # request context returns the ARN of the role, not the ARN of the user that
+  # assumed the role" -- so matching on it is exact and session-independent.
+  # This is the form AWS's own docs demonstrate for "deny all but this role".
   statement {
     sid    = "DenyUnlessPlatformPrincipal"
     effect = "Deny"
 
-    not_principals {
-      type        = "AWS"
-      identifiers = local.allowed_state_principals
+    principals {
+      type        = "*"
+      identifiers = ["*"]
     }
 
     actions = ["s3:*"]
@@ -282,6 +293,12 @@ data "aws_iam_policy_document" "tfstate" {
       aws_s3_bucket.tfstate.arn,
       "${aws_s3_bucket.tfstate.arn}/*",
     ]
+
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = local.allowed_state_principals
+    }
   }
 }
 
