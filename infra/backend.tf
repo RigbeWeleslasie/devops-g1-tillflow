@@ -1,14 +1,18 @@
 # S3 remote state backend.
 #
-# Enable AFTER `infra/bootstrap` has created the bucket + lock table.
-# Fill <ACCOUNT_ID> (or use `-backend-config` / a backend.hcl file in CI).
+# Created by `infra/bootstrap` (see ADR 0004). Bucket name embeds the account id
+# because S3 names are globally unique; the DynamoDB table serialises concurrent
+# applies so CI and a laptop can never write state at the same time.
 #
-# terraform {
-#   backend "s3" {
-#     bucket         = "devops-g1-tfstate-<ACCOUNT_ID>"
-#     key            = "tillflow/main/terraform.tfstate"
-#     region         = "us-east-1"
-#     dynamodb_table = "devops-g1-tflock"
-#     encrypt        = true
-#   }
-# }
+#   make bootstrap            # once, local state
+#   terraform -chdir=infra init
+
+terraform {
+  backend "s3" {
+    bucket         = "devops-g1-tfstate-240462142849"
+    key            = "tillflow/main/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "devops-g1-tflock"
+    encrypt        = true
+  }
+}

@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "Assigned AWS region. Fixed by ADR 0002; not overridable per-env."
+  description = "Assigned AWS region. Fixed by ADR 0002."
   type        = string
   default     = "us-east-1"
 
@@ -11,11 +11,11 @@ variable "aws_region" {
 
 variable "aws_account_id" {
   description = <<-EOT
-    The capstone AWS account (cohort account, group 1). Pinned via the provider's
-    `allowed_account_ids` so Terraform refuses to run anywhere else.
+    The capstone AWS account. Terraform refuses to run against any other account
+    (provider `allowed_account_ids`), so a wrong/forgotten AWS_PROFILE fails before
+    it creates anything. Set it in terraform.tfvars -- see terraform.tfvars.example.
   EOT
   type        = string
-  default     = "240462142849"
 
   validation {
     condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
@@ -40,5 +40,3 @@ variable "group" {
   type        = string
   default     = "g1"
 }
-
-# owner is set per-resource/module (the DRI of that area), not globally.
