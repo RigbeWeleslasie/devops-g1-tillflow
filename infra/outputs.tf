@@ -40,3 +40,35 @@ output "nat_public_ips" {
   description = "NAT egress IPs — the addresses Daraja sees from us."
   value       = [for e in aws_eip.nat : e.public_ip]
 }
+
+# --- consumed by the GitHub Actions pipeline -------------------------------
+
+output "ci_deploy_role_arn" {
+  description = "Role GitHub Actions assumes via OIDC. No long-lived keys exist."
+  value       = aws_iam_role.ci_deploy.arn
+}
+
+output "ecr_repository_urls" {
+  description = "ECR repository URL per service."
+  value       = { for k, r in aws_ecr_repository.service : k => r.repository_url }
+}
+
+output "ecs_cluster_name" {
+  description = "ECS cluster."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "ecs_service_names" {
+  description = "ECS service name per service key."
+  value       = { for k, s in aws_ecs_service.service : k => s.name }
+}
+
+output "api_endpoint" {
+  description = "Public API Gateway endpoint — the only ingress."
+  value       = aws_apigatewayv2_api.main.api_endpoint
+}
+
+output "alb_dns_name" {
+  description = "Internal ALB DNS (reachable only from inside the VPC)."
+  value       = aws_lb.main.dns_name
+}
