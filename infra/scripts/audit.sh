@@ -66,27 +66,44 @@ echo
 
 echo "== Tag audit =="
 
-# Fetch EVERY tagged resource in the region, not just ones already carrying
-# capstone=tillflow.
+# Scope: resources THIS stack manages, reconciled against Terraform state.
 #
-# Filtering on the tag first makes the audit unable to fail on its own subject: a
-# resource missing `capstone` is simply not returned, so a missing required tag
-# is invisible to the check that exists to catch it. Instead, pull everything and
-# select ours by the name prefix as well as the tag -- a devops-g1-* resource
-# that is missing tags then still shows up, and still fails.
+# Two wrong ways to pick the set, both tried:
+#
+#   --tag-filters capstone=tillflow  -- makes the audit unable to fail on its own
+#     subject. A resource missing the tag is simply not returned, so the one
+#     condition the audit exists to catch is invisible to it.
+#
+#   name prefix   -- this is a SHARED cohort account. Another team runs a
+#     `devops-g1-iac-*` stack here (a ride-hailing app: ride-api, dispatch,
+#     matching). Matching on "devops-g1" reports their untagged resources as our
+#     violations, which is both wrong and unfixable by us.
+#
+# So: ask Terraform what we own. `state list` is authoritative regardless of
+# tags, which keeps an untagged resource of ours in scope while leaving another
+# team's similarly-named resources out.
 all_json="$(aws resourcegroupstaggingapi get-resources \
   --region "$REGION" --output json)"
 
-resources_json="$(jq --arg p "$PREFIX" '
-  .ResourceTagMappingList |= map(
-    select(
-      # ours by tag ...
-      ((.Tags // []) | map({(.Key): .Value}) | add // {} | .capstone == "tillflow")
-      # ... or ours by name, which is how an untagged resource gets caught.
-      or (.ResourceARN | contains($p))
-      or (((.Tags // []) | map({(.Key): .Value}) | add // {} | .Name // "") | startswith($p))
-    )
-  )
+# One `state pull` and a single jq walk: `state show` per address would be
+# hundreds of round-trips across a stack this size.
+state_arns="$(terraform -chdir="$_script_dir/.." state pull 2>/dev/null |
+  jq -r '
+    [ .resources[]?
+      | select(.mode == "managed")
+      | .instances[]?.attributes
+      | (.arn // empty)
+    ] | unique[]
+  ' 2>/dev/null)"
+
+if [[ -z "$state_arns" ]]; then
+  red "Could not read Terraform state. Run from a clone with the backend initialised:"
+  red "  terraform -chdir=infra init"
+  exit 2
+fi
+
+resources_json="$(jq --argjson owned "$(jq -R . <<<"$state_arns" | jq -s .)" '
+  .ResourceTagMappingList |= map(select(.ResourceARN as $a | $owned | index($a)))
 ' <<<"$all_json")"
 
 count="$(jq '.ResourceTagMappingList | length' <<<"$resources_json")"
