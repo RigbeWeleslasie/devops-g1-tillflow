@@ -178,10 +178,20 @@ data "aws_iam_policy_document" "ci_plan_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # GitHub's `sub` claim is not always `:pull_request`. A workflow run on a
+    # branch -- including the same run re-triggered by a push -- sends
+    # `ref:refs/heads/<branch>` instead, and the role then cannot be assumed at
+    # all ("Not authorized to perform sts:AssumeRoleWithWebIdentity"). Both
+    # shapes are accepted here; the scope that matters is the repository, and
+    # this role is read-only either way (ReadOnlyAccess + the object-read deny).
+    # Write access stays on ci_deploy, whose trust excludes pull_request.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:pull_request"]
+      values = [
+        "repo:${var.github_repository}:pull_request",
+        "repo:${var.github_repository}:ref:refs/heads/*",
+      ]
     }
   }
 }
