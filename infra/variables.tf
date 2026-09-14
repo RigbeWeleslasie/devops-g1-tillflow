@@ -40,6 +40,38 @@ variable "github_repository" {
   }
 }
 
+variable "github_owner_id" {
+  description = <<-EOT
+    Numeric GitHub account id of the repository owner. This org emits OIDC `sub`
+    claims in the immutable-identifier format
+    (`repo:<owner>@<owner_id>/<repo>@<repo_id>:<trigger>`), so the trust policies
+    match on ids rather than names -- ids never change and never transfer.
+    Read it from the token claims, or:
+      curl -s https://api.github.com/users/<owner> | jq .id
+  EOT
+  type        = string
+  default     = "198869474"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_owner_id))
+    error_message = "github_owner_id must be numeric."
+  }
+}
+
+variable "github_repository_id" {
+  description = <<-EOT
+    Numeric GitHub repository id. See github_owner_id.
+      curl -s https://api.github.com/repos/<owner>/<repo> | jq .id
+  EOT
+  type        = string
+  default     = "1362867461"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "github_repository_id must be numeric."
+  }
+}
+
 variable "vpc_cidr" {
   description = "VPC CIDR. /16 split into /20 subnets across 2 AZs (see network.tf)."
   type        = string

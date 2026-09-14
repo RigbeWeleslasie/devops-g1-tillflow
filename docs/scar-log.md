@@ -118,6 +118,36 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — OIDC assume-role denied: GitHub's immutable-identifier `sub`
+- **Area:** infra (IAM) / CI
+- **What happened:** Every GitHub Actions job using OIDC failed with
+  `Could not assume role with OIDC: Not authorized to perform
+  sts:AssumeRoleWithWebIdentity`. Three trust-policy rewrites -- adding
+  `ref:refs/heads/*`, then a `repo:<owner>/<repo>:*` wildcard -- all failed
+  identically.
+- **Impact:** `infra-plan` and `audit` could not run on any PR. No effect on the
+  deployed platform: the same deploy path works from a laptop via
+  `./infra/scripts/deploy.sh`, which is what the workflow calls.
+- **Root cause:** This GitHub org emits OIDC claims in the **immutable-identifier
+  format**. The `sub` is not the documented `repo:<owner>/<repo>:<trigger>` but:
+
+      repo:RigbeWeleslasie@198869474/devops-g1-tillflow@1362867461:pull_request
+
+  -- the numeric account and repository ids are interpolated after each name.
+  Every name-based pattern is a literal-text mismatch, so the policy could never
+  match no matter how the trigger portion was written.
+- **Fix:** Match on the ids: `repo:*@<owner_id>/*@<repo_id>:<trigger>`, for both
+  ci-plan and ci-deploy. This is *stronger* than name matching -- a repo can be
+  renamed and a freed name re-registered by someone else, but the ids never
+  change and never transfer.
+- **Prevention:** Do not infer an OIDC claim from documentation. The workflow now
+  keeps a step that prints the token's own claims (`sub`, `aud`, `repository`,
+  `ref`, `event_name`) -- claims only, never the token -- so the next mismatch is
+  one run away from being obvious instead of three guesses deep. The wrong-turn
+  signal was three structurally different policies failing with an identical
+  error: that means the input, not the policy.
+- **Owner:** Meron
+
 ### 2026-09-15 — API Gateway 503: a tls_config that AWS would not let go of
 - **Area:** infra (edge: API Gateway -> VPC Link -> internal ALB)
 - **What happened:** Every request through the public edge returned 503 while ECS

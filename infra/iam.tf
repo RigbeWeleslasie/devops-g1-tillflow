@@ -52,12 +52,17 @@ data "aws_iam_policy_document" "ci_deploy_assume" {
     # instead; only a push to main or the protected "prod" environment (i.e.
     # deploy.yml, which requires the environment's required reviewers) may
     # assume this role.
+    #
+    # Matched by immutable IDs, for the same reason as ci_plan below: this org
+    # emits `repo:<owner>@<owner_id>/<repo>@<repo_id>:<trigger>`, so a name-only
+    # pattern matches nothing at all. The trailing trigger is still pinned
+    # exactly -- that is the part doing the security work here.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repository}:ref:refs/heads/main",
-        "repo:${var.github_repository}:environment:prod",
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:ref:refs/heads/main",
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:environment:prod",
       ]
     }
   }
@@ -178,23 +183,28 @@ data "aws_iam_policy_document" "ci_plan_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Any workflow run in THIS repository, whatever the trigger.
+    # This repository, matched by IMMUTABLE IDs.
     #
-    # Enumerating `sub` shapes (`:pull_request`, `:ref:refs/heads/*`) kept failing
-    # with "Not authorized to perform sts:AssumeRoleWithWebIdentity" -- GitHub
-    # emits more variants than are obvious (pull_request_target, merge groups,
-    # environments, tags), and a claim that is not listed cannot assume the role
-    # at all. The repository is the boundary that actually matters here; this
-    # role is read-only regardless of which workflow assumes it (ReadOnlyAccess
-    # plus the object-read deny below).
+    # The org has GitHub's immutable-identifier format enabled, so the `sub`
+    # claim is not `repo:<owner>/<repo>:...` but:
     #
-    # The write role is where trigger-scoping belongs, and ci_deploy still pins
-    # `ref:refs/heads/main` and `environment:prod` -- so a pull_request run can
-    # read, and can never apply.
+    #   repo:RigbeWeleslasie@198869474/devops-g1-tillflow@1362867461:pull_request
+    #
+    # -- the numeric account and repository IDs are interpolated after each name.
+    # A name-only pattern cannot match that text, which is why every trust policy
+    # written against the documented shape failed with "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity" (see docs/scar-log.md).
+    #
+    # Matching on the IDs is stronger than matching on names: a repo can be
+    # renamed, and a freed-up name can be claimed by someone else, but these IDs
+    # never change and never transfer. The wildcards cover the name halves (which
+    # may change) and the trailing trigger.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
+      values = [
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:*",
+      ]
     }
   }
 }
