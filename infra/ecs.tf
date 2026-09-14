@@ -237,7 +237,11 @@ resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
   ip_protocol                  = "tcp"
   description                  = "App traffic from the internal ALB"
 
-  tags = { Name = "${local.prefix}-${each.key}-from-alb" }
+  tags = {
+    Name    = "${local.prefix}-${each.key}-from-alb"
+    service = each.key
+    owner   = local.service_owner[each.key]
+  }
 }
 
 # Egress: HTTPS only. Enough for ECR, logs, Secrets Manager and (for payments)
@@ -254,7 +258,11 @@ resource "aws_vpc_security_group_egress_rule" "service_https" {
   cidr_ipv4         = "0.0.0.0/0"
   description       = "HTTPS egress (ECR, logs, secrets, Daraja for payments)"
 
-  tags = { Name = "${local.prefix}-${each.key}-https" }
+  tags = {
+    Name    = "${local.prefix}-${each.key}-https"
+    service = each.key
+    owner   = local.service_owner[each.key]
+  }
 }
 
 # ---------------------------------------------------------------------------

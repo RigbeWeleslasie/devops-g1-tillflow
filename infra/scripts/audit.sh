@@ -127,7 +127,9 @@ while IFS= read -r arn; do
 
   case "$arn" in
     # Identified by generated id -> the Name tag is the name.
-    *:ec2:*|*:elasticloadbalancing:*)
+    # API Gateway (/apis/k0lz..., /vpclinks/c54l...) and ACM (certificate/uuid)
+    # belong here too: the id is server-assigned, so only the tag can carry it.
+    *:ec2:*|*:elasticloadbalancing:*|*:apigateway:*|*:acm:*)
       if [[ -z "$name_tag" ]]; then
         red "FAIL  no Name tag: $arn"
         name_violations=$((name_violations + 1))

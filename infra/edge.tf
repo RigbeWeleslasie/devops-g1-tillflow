@@ -32,7 +32,11 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_vpclink" {
   ip_protocol                  = "tcp"
   description                  = "HTTPS from the API Gateway VPC Link"
 
-  tags = { Name = "${local.prefix}-alb-from-vpclink" }
+  tags = {
+    Name    = "${local.prefix}-alb-from-vpclink"
+    service = "platform"
+    owner   = "meron"
+  }
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_tasks" {
@@ -43,7 +47,11 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_tasks" {
   cidr_ipv4         = aws_vpc.main.cidr_block
   description       = "Forward to ECS tasks in the VPC"
 
-  tags = { Name = "${local.prefix}-alb-to-tasks" }
+  tags = {
+    Name    = "${local.prefix}-alb-to-tasks"
+    service = "platform"
+    owner   = "meron"
+  }
 }
 
 resource "aws_lb" "main" {
@@ -245,7 +253,11 @@ resource "aws_vpc_security_group_egress_rule" "vpclink_to_alb" {
   ip_protocol                  = "tcp"
   description                  = "To the internal ALB"
 
-  tags = { Name = "${local.prefix}-vpclink-to-alb" }
+  tags = {
+    Name    = "${local.prefix}-vpclink-to-alb"
+    service = "platform"
+    owner   = "meron"
+  }
 }
 
 resource "aws_apigatewayv2_vpc_link" "main" {
@@ -337,8 +349,10 @@ resource "aws_apigatewayv2_stage" "default" {
     detailed_metrics_enabled = true
   }
 
+  # The stage's own name must be the literal `$default`; the prefix lives in the
+  # Name tag, which is what the audit checks for id-addressed resources.
   tags = {
-    Name    = "${local.prefix}-default"
+    Name    = "${local.prefix}-apigw-default"
     service = "platform"
     owner   = "meron"
   }
