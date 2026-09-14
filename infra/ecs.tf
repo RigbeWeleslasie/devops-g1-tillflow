@@ -226,9 +226,13 @@ resource "aws_security_group" "service" {
   }
 }
 
-# Ingress: only from the ALB, only on the app port.
+# Ingress: only from the ALB, only on the app port. Excludes `commission`: it
+# is a worker with no target group/listener (see the load_balancer dynamic
+# block below), so an ALB->commission rule would sit open and unused,
+# widening its attack surface and silently pre-authorizing any future
+# mis-wiring of a listener straight to the worker.
 resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
-  for_each = toset(local.services)
+  for_each = toset([for s in local.services : s if s != "commission"])
 
   security_group_id            = aws_security_group.service[each.key].id
   referenced_security_group_id = aws_security_group.alb.id

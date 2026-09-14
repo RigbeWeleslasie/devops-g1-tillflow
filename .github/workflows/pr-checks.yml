@@ -178,7 +178,7 @@ jobs:
     if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write        # OIDC -> devops-g1-ci-deploy
+      id-token: write        # OIDC -> devops-g1-ci-plan (read-only)
       contents: read
       pull-requests: write   # to post the plan
     steps:
@@ -188,14 +188,17 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials (OIDC — no stored keys)
+      - name: Configure AWS credentials (OIDC, read-only)
+        # devops-g1-ci-plan, NOT ci-deploy: a pull_request run must never hold
+        # write credentials. ci-deploy's trust policy excludes pull_request for
+        # the same reason, so this is enforced on both ends (infra/iam.tf).
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-deploy
+          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-plan-${{ github.run_id }}
 
-      - name: terraform fmt
+      - name: terraform fmt -check
         run: terraform -chdir=infra fmt -check -recursive
 
       - name: terraform init
@@ -255,10 +258,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials (OIDC, read-only)
+        # The audit only describes resources, so the read-only role suffices.
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-deploy
+          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-audit-${{ github.run_id }}
 

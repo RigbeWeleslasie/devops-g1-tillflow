@@ -53,13 +53,21 @@ data "aws_iam_policy_document" "ci_deploy_assume" {
 
     # Scope to this repo. `sub` encodes repo + ref, so this both pins the
     # repository and limits which refs/environments may deploy.
+    #
+    # Deliberately does NOT include "repo:<repo>:pull_request" — that `sub`
+    # value is identical for every PR run regardless of branch, author or
+    # target environment, so including it here would let any pull_request
+    # workflow assume a role carrying PowerUserAccess + IAM rights before any
+    # review happens. PR-triggered plans use the read-only ci_plan role below
+    # instead; only a push to main or the protected "prod" environment (i.e.
+    # deploy.yml, which requires the environment's required reviewers) may
+    # assume this role.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:${var.github_repository}:ref:refs/heads/main",
         "repo:${var.github_repository}:environment:prod",
-        "repo:${var.github_repository}:pull_request",
       ]
     }
   }
@@ -152,6 +160,123 @@ resource "aws_iam_role_policy" "ci_deploy_iam" {
   name   = "${local.prefix}-ci-deploy-iam"
   role   = aws_iam_role.ci_deploy.id
   policy = data.aws_iam_policy_document.ci_deploy_iam.json
+}
+
+# ---------------------------------------------------------------------------
+# CI plan role — assumed by GitHub Actions on pull_request only
+#
+# `terraform plan` on a PR needs to read AWS + state to render a diff, but a
+# PR from any branch must never be able to write anything. This role is
+# read-only (no PowerUserAccess, no IAM write) and is the only role
+# pull_request-triggered workflows (pr-checks.yml's infra-plan job) may
+# assume; ci_deploy above no longer accepts the pull_request `sub` value.
+# ---------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "ci_plan_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:pull_request"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ci_plan" {
+  name               = "${local.prefix}-ci-plan"
+  description        = "Read-only GitHub Actions OIDC role for PR terraform plan on ${var.github_repository}"
+  assume_role_policy = data.aws_iam_policy_document.ci_plan_assume.json
+
+  max_session_duration = 3600 # AWS minimum; a plan run doesn't need more
+
+  tags = {
+    Name    = "${local.prefix}-ci-plan"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ci_plan_readonly" {
+  role       = aws_iam_role.ci_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# ReadOnlyAccess grants s3:GetObject account-wide -- not just on the tfstate
+# bucket, but on every bucket in the account, including artifacts/backups/
+# evidence and anything belonging to other groups sharing this cohort
+# account. A pull_request run from any branch could otherwise read object
+# CONTENTS anywhere, not just infrastructure metadata. Deny object reads
+# everywhere except the one bucket plan genuinely needs to read from.
+data "aws_iam_policy_document" "ci_plan_deny_object_reads" {
+  statement {
+    sid    = "DenyObjectReadsExceptState"
+    effect = "Deny"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:GetObjectAttributes",
+      "s3:GetObjectTagging",
+    ]
+    not_resources = [
+      "arn:aws:s3:::${local.buckets.tfstate}/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_plan_deny_object_reads" {
+  name   = "${local.prefix}-ci-plan-deny-object-reads"
+  role   = aws_iam_role.ci_plan.id
+  policy = data.aws_iam_policy_document.ci_plan_deny_object_reads.json
+}
+
+# The state bucket's CMK is created by infra/bootstrap -- a separate root
+# module with its own state, so it isn't an `aws_kms_key` resource here. A
+# live alias lookup is the correct way to reference it from this stack
+# (not cross-state referencing, which would couple two independent applies).
+data "aws_kms_alias" "state" {
+  name = "alias/${local.prefix}-tfstate"
+}
+
+# ReadOnlyAccess does not cover kms:Decrypt (KMS crypto operations are
+# deliberately excluded from the managed policy, unlike Describe/Get/List) or
+# DynamoDB writes -- and the S3 backend needs both to actually run `plan`:
+# kms:Decrypt to read the SSE-KMS-encrypted state object, and GetItem/
+# PutItem/DeleteItem (not just DescribeTable) to take and release the state
+# lock, since the backend locks even for a read-only plan unless `-lock=false`.
+data "aws_iam_policy_document" "ci_plan_state_access" {
+  statement {
+    sid       = "TerraformStateDecrypt"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [data.aws_kms_alias.state.target_key_arn]
+  }
+
+  statement {
+    sid       = "TerraformStateLock"
+    effect    = "Allow"
+    actions   = ["dynamodb:DescribeTable", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+    resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/${local.prefix}-tflock"]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_plan_state_access" {
+  name   = "${local.prefix}-ci-plan-state-access"
+  role   = aws_iam_role.ci_plan.id
+  policy = data.aws_iam_policy_document.ci_plan_state_access.json
 }
 
 # ---------------------------------------------------------------------------

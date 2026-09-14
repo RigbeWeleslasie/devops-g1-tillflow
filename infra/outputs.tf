@@ -44,8 +44,13 @@ output "nat_public_ips" {
 # --- consumed by the GitHub Actions pipeline -------------------------------
 
 output "ci_deploy_role_arn" {
-  description = "Role GitHub Actions assumes via OIDC. No long-lived keys exist."
+  description = "Role deploy.yml assumes on push to main / the prod environment. Never usable from a pull_request run."
   value       = aws_iam_role.ci_deploy.arn
+}
+
+output "ci_plan_role_arn" {
+  description = "Read-only role pr-checks.yml's infra-plan job assumes on pull_request."
+  value       = aws_iam_role.ci_plan.arn
 }
 
 output "ecr_repository_urls" {

@@ -41,6 +41,39 @@ locals {
   account_id   = data.aws_caller_identity.current.account_id
   state_bucket = "${var.name_prefix}-tfstate-${local.account_id}"
   lock_table   = "${var.name_prefix}-tflock"
+
+  # docs/threat-model.md's mitigation for "Terraform state tampering" is that
+  # bucket access is restricted to CI + platform roles. Referenced by ARN
+  # (not a resource dependency): ci-deploy/ci-plan are created by the main
+  # stack in infra/iam.tf, using this same name prefix, so the ARNs are
+  # deterministic even though those roles don't exist at bootstrap time.
+  #
+  # data.aws_caller_identity.current.arn -- whoever is actually running THIS
+  # apply -- is always included. Without it, an operator whose ARN isn't
+  # already on the list locks themselves out the moment this policy first
+  # applies: the Deny below covers s3:*, including s3:PutBucketPolicy, so
+  # undoing the mistake needs the very permission it just removed, leaving
+  # only literal AWS account root (email+password+MFA, not an admin IAM
+  # role/user) able to recover. Self-inclusion means the operator who applies
+  # a change to this policy can never be locked out by that same apply.
+  #
+  # It only protects the CURRENT session, though: assumed-role (SSO) sessions
+  # get a new, different ARN on every login, so a future apply from a new SSO
+  # session recomputes a different current.arn and would itself be blocked by
+  # today's already-deployed policy unless it's covered by one of the stable
+  # entries below. For an operator who returns across multiple sessions,
+  # pin a STABLE identity (an IAM user ARN, or an SSO permission-set role ARN
+  # covering every session from it) via state_bucket_extra_principal_arns
+  # instead of relying on self-inclusion alone.
+  allowed_state_principals = concat(
+    [
+      "arn:aws:iam::${local.account_id}:root",
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-deploy",
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-plan",
+      data.aws_caller_identity.current.arn,
+    ],
+    var.state_bucket_extra_principal_arns,
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -224,6 +257,47 @@ data "aws_iam_policy_document" "tfstate" {
       test     = "Null"
       variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
       values   = ["false"]
+    }
+  }
+
+  # Everything above governs *how* an already-allowed principal may write.
+  # Nothing so far actually restricts *who* that principal is -- the bucket
+  # policy alone leaves state readable/writable by any IAM identity in this
+  # shared cohort account that happens to hold a generic s3:GetObject/
+  # PutObject grant. This statement is what docs/threat-model.md's "restricted
+  # to CI + platform roles" claim actually depends on.
+  #
+  # Deny + Condition(ArnNotEquals on aws:PrincipalArn), not NotPrincipal:
+  # AWS's own docs (IAM User Guide, "NotPrincipal") explicitly advise against
+  # NotPrincipal in new resource-based policies -- for an assumed-role caller,
+  # evaluation can check account, then role, then the assumed-role *session*
+  # (identified by session name), and NotPrincipal only reliably excludes an
+  # exact match, so a bare role ARN alone is not the documented-safe form
+  # there. aws:PrincipalArn does not have that problem: for a role session
+  # (AssumeRole or, as ci-deploy/ci-plan use, AssumeRoleWithWebIdentity), it
+  # is confirmed to hold the bare role ARN regardless of session name -- "the
+  # request context returns the ARN of the role, not the ARN of the user that
+  # assumed the role" -- so matching on it is exact and session-independent.
+  # This is the form AWS's own docs demonstrate for "deny all but this role".
+  statement {
+    sid    = "DenyUnlessPlatformPrincipal"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.tfstate.arn,
+      "${aws_s3_bucket.tfstate.arn}/*",
+    ]
+
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = local.allowed_state_principals
     }
   }
 }
