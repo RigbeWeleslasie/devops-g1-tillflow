@@ -167,8 +167,15 @@ data "aws_iam_policy_document" "tfstate" {
     }
   }
 
+  # Deny only uploads that explicitly ask for the WRONG encryption.
+  #
+  # A plain `StringNotEquals` here also denies requests that send no encryption
+  # header at all -- which is what the Terraform S3 backend does. Those uploads
+  # are still encrypted, by the bucket's default SSE-KMS rule above, so denying
+  # them buys nothing and breaks state writes. `Null = false` scopes the deny to
+  # requests that set the header, letting header-less ones take the default.
   statement {
-    sid    = "DenyUnencryptedObjectUploads"
+    sid    = "DenyWrongEncryptionHeader"
     effect = "Deny"
 
     principals {
@@ -183,6 +190,12 @@ data "aws_iam_policy_document" "tfstate" {
       test     = "StringNotEquals"
       variable = "s3:x-amz-server-side-encryption"
       values   = ["aws:kms"]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "s3:x-amz-server-side-encryption"
+      values   = ["false"]
     }
   }
 }
