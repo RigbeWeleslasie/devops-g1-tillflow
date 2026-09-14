@@ -44,6 +44,20 @@ green() { printf '\033[32m%s\033[0m\n' "$*"; }
 dim()   { printf '\033[2m%s\033[0m\n' "$*"; }
 
 violations=0
+
+# Check the tools before anything uses them: `set -e` on a missing binary exits
+# 127 with no message, which reads as a mystery in CI rather than "terraform is
+# not installed".
+for tool in terraform jq aws; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    red "Required tool not found: $tool"
+    red "  terraform -- the audit reconciles against 'terraform state pull'"
+    red "  jq        -- parses state and the tagging API"
+    red "  aws       -- the tagging API itself"
+    exit 2
+  }
+done
+
 checked=0
 
 # --- guard: never audit (or report on) the wrong account -------------------
@@ -87,14 +101,20 @@ all_json="$(aws resourcegroupstaggingapi get-resources \
 
 # One `state pull` and a single jq walk: `state show` per address would be
 # hundreds of round-trips across a stack this size.
-state_arns="$(terraform -chdir="$_script_dir/.." state pull 2>/dev/null |
-  jq -r '
-    [ .resources[]?
-      | select(.mode == "managed")
-      | .instances[]?.attributes
-      | (.arn // empty)
-    ] | unique[]
-  ' 2>/dev/null)"
+state_raw="$(terraform -chdir="$_script_dir/.." state pull 2>&1)" || {
+  red "terraform state pull failed:"
+  printf '%s\n' "$state_raw" | sed 's/^/    /' | head -20
+  red "Has the backend been initialised? (terraform -chdir=infra init)"
+  exit 2
+}
+
+state_arns="$(jq -r '
+  [ .resources[]?
+    | select(.mode == "managed")
+    | .instances[]?.attributes
+    | (.arn // empty)
+  ] | unique[]
+' <<<"$state_raw" 2>/dev/null)"
 
 if [[ -z "$state_arns" ]]; then
   red "Could not read Terraform state. Run from a clone with the backend initialised:"

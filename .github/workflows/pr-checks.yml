@@ -295,6 +295,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The audit reconciles against `terraform state pull` to scope itself to
+      # resources THIS stack owns -- the cohort account is shared, and matching
+      # on the devops-g1 name prefix would report another team's untagged
+      # devops-g1-iac-* resources as our violations. That means the job needs
+      # Terraform and an initialised backend, not just the AWS CLI.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false   # the wrapper mangles `state pull` output
+
       - name: Configure AWS credentials (OIDC, read-only)
         # The audit only describes resources, so the read-only role suffices.
         uses: aws-actions/configure-aws-credentials@v4
@@ -302,6 +312,9 @@ jobs:
           role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-audit-${{ github.run_id }}
+
+      - name: terraform init
+        run: terraform -chdir=infra init -input=false
 
       - name: Naming + tag audit
         run: ./infra/scripts/audit.sh
