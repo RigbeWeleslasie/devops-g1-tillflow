@@ -213,6 +213,26 @@ resource "aws_security_group" "vpclink" {
   }
 }
 
+# API Gateway's VPC Link ENIs need ingress on the integration port, not just
+# egress. Declaring the SG with no inline rules drops the default allow-all
+# egress, and adding only an egress rule leaves the link with zero ingress --
+# requests then hang until API Gateway times out at ~9s and returns a bare 503,
+# with ALB RequestCount stuck at 0 because nothing ever arrives.
+resource "aws_vpc_security_group_ingress_rule" "vpclink_from_vpc" {
+  security_group_id = aws_security_group.vpclink.id
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  cidr_ipv4         = aws_vpc.main.cidr_block
+  description       = "Integration traffic within the VPC"
+
+  tags = {
+    Name    = "${local.prefix}-vpclink-ingress"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
 resource "aws_vpc_security_group_egress_rule" "vpclink_to_alb" {
   security_group_id            = aws_security_group.vpclink.id
   referenced_security_group_id = aws_security_group.alb.id
