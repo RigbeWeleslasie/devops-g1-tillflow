@@ -1,0 +1,14 @@
+{
+  "name": "tillflow-golden-path-reference",
+  "private": true,
+  "description": "Dependency-free reference service proving the shared Docker/ECS/ADOT golden path. See app.js.",
+  "version": "0.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {}
+}

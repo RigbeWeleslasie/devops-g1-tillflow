@@ -41,6 +41,24 @@ locals {
   account_id   = data.aws_caller_identity.current.account_id
   state_bucket = "${var.name_prefix}-tfstate-${local.account_id}"
   lock_table   = "${var.name_prefix}-tflock"
+
+  # docs/threat-model.md's mitigation for "Terraform state tampering" is that
+  # bucket access is restricted to CI + platform roles. Referenced by ARN
+  # (not a resource dependency): ci-deploy/ci-plan are created by the main
+  # stack in infra/iam.tf, using this same name prefix, so the ARNs are
+  # deterministic even though those roles don't exist at bootstrap time.
+  # Account root is included so a locked-out operator can always recover via
+  # the AWS console/root credentials; var.state_bucket_extra_principal_arns
+  # covers the human operator's own role/user for the first manual
+  # `terraform init -migrate-state` before ci-deploy exists in CI.
+  allowed_state_principals = concat(
+    [
+      "arn:aws:iam::${local.account_id}:root",
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-deploy",
+      "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-plan",
+    ],
+    var.state_bucket_extra_principal_arns,
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -225,6 +243,30 @@ data "aws_iam_policy_document" "tfstate" {
       variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
       values   = ["false"]
     }
+  }
+
+  # Everything above governs *how* an already-allowed principal may write.
+  # Nothing so far actually restricts *who* that principal is -- the bucket
+  # policy alone leaves state readable/writable by any IAM identity in this
+  # shared cohort account that happens to hold a generic s3:GetObject/
+  # PutObject grant. This statement is what docs/threat-model.md's "restricted
+  # to CI + platform roles" claim actually depends on: NotPrincipal + Deny
+  # locks the bucket to local.allowed_state_principals, in addition to
+  # whatever each principal's own IAM policy already allows.
+  statement {
+    sid    = "DenyUnlessPlatformPrincipal"
+    effect = "Deny"
+
+    not_principals {
+      type        = "AWS"
+      identifiers = local.allowed_state_principals
+    }
+
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.tfstate.arn,
+      "${aws_s3_bucket.tfstate.arn}/*",
+    ]
   }
 }
 

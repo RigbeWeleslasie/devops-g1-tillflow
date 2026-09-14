@@ -134,11 +134,13 @@ variable "api_throttle_rate" {
 
 variable "enable_alb_access_logs" {
   description = <<-EOT
-    ALB access logs to S3. Requires the logs bucket and its delivery policy to
-    exist first (created alongside the other buckets), so it is off until then.
+    ALB access logs to S3. The logs bucket + its delivery policy now exist
+    (storage.tf), and edge.tf's access_logs block depends on that policy, so
+    this defaults on. Flip to false only to save the trickle of S3 cost while
+    iterating, never as a way to dodge a missing bucket.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "environment" {

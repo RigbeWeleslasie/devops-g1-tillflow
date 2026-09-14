@@ -40,3 +40,16 @@ variable "group" {
   type        = string
   default     = "g1"
 }
+
+variable "state_bucket_extra_principal_arns" {
+  description = <<-EOT
+    Extra IAM principal ARNs allowed to read/write the Terraform state bucket,
+    beyond account root and the ci-deploy/ci-plan roles (infra/iam.tf) which
+    are always allowed. Needed for the human operator's own IAM role/user so
+    the first manual `terraform init -migrate-state` on the main stack works
+    before ci-deploy exists. Example: your admin role's ARN in
+    terraform.tfvars. Leave empty once CI is the only thing that touches state.
+  EOT
+  type        = list(string)
+  default     = []
+}

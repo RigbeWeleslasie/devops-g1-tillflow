@@ -53,13 +53,21 @@ data "aws_iam_policy_document" "ci_deploy_assume" {
 
     # Scope to this repo. `sub` encodes repo + ref, so this both pins the
     # repository and limits which refs/environments may deploy.
+    #
+    # Deliberately does NOT include "repo:<repo>:pull_request" — that `sub`
+    # value is identical for every PR run regardless of branch, author or
+    # target environment, so including it here would let any pull_request
+    # workflow assume a role carrying PowerUserAccess + IAM rights before any
+    # review happens. PR-triggered plans use the read-only ci_plan role below
+    # instead; only a push to main or the protected "prod" environment (i.e.
+    # deploy.yml, which requires the environment's required reviewers) may
+    # assume this role.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:${var.github_repository}:ref:refs/heads/main",
         "repo:${var.github_repository}:environment:prod",
-        "repo:${var.github_repository}:pull_request",
       ]
     }
   }
@@ -152,6 +160,79 @@ resource "aws_iam_role_policy" "ci_deploy_iam" {
   name   = "${local.prefix}-ci-deploy-iam"
   role   = aws_iam_role.ci_deploy.id
   policy = data.aws_iam_policy_document.ci_deploy_iam.json
+}
+
+# ---------------------------------------------------------------------------
+# CI plan role — assumed by GitHub Actions on pull_request only
+#
+# `terraform plan` on a PR needs to read AWS + state to render a diff, but a
+# PR from any branch must never be able to write anything. This role is
+# read-only (no PowerUserAccess, no IAM write) and is the only role
+# pull_request-triggered workflows (pr-checks.yml's infra-plan job) may
+# assume; ci_deploy above no longer accepts the pull_request `sub` value.
+# ---------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "ci_plan_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:pull_request"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ci_plan" {
+  name               = "${local.prefix}-ci-plan"
+  description        = "Read-only GitHub Actions OIDC role for PR terraform plan on ${var.github_repository}"
+  assume_role_policy = data.aws_iam_policy_document.ci_plan_assume.json
+
+  max_session_duration = 3600 # AWS minimum; a plan run doesn't need more
+
+  tags = {
+    Name    = "${local.prefix}-ci-plan"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ci_plan_readonly" {
+  role       = aws_iam_role.ci_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# ReadOnlyAccess covers describe/get/list everywhere but does not cover
+# reading Terraform state object bytes out of a non-public bucket, which is
+# still just s3:GetObject -- included in ReadOnlyAccess -- so no extra grant
+# is needed here beyond the DynamoDB lock table read below (ReadOnlyAccess
+# already grants dynamodb:GetItem).
+data "aws_iam_policy_document" "ci_plan_state_lock" {
+  statement {
+    sid       = "TerraformStateLockRead"
+    effect    = "Allow"
+    actions   = ["dynamodb:DescribeTable"]
+    resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/${local.prefix}-tflock"]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_plan_state_lock" {
+  name   = "${local.prefix}-ci-plan-state-lock"
+  role   = aws_iam_role.ci_plan.id
+  policy = data.aws_iam_policy_document.ci_plan_state_lock.json
 }
 
 # ---------------------------------------------------------------------------

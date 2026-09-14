@@ -65,10 +65,15 @@ resource "aws_lb" "main" {
   enable_deletion_protection = false # capstone: destroy/rebuild must work
 
   access_logs {
-    bucket  = local.buckets.logs
+    # Resource reference, not local.buckets.logs by name: this makes Terraform
+    # create the bucket + its log-delivery policy (storage.tf) before the ALB,
+    # so enabling access logs can never race an as-yet-nonexistent bucket.
+    bucket  = aws_s3_bucket.logs.id
     prefix  = "alb"
     enabled = var.enable_alb_access_logs
   }
+
+  depends_on = [aws_s3_bucket_policy.logs]
 
   tags = {
     Name    = "${local.prefix}-alb"
