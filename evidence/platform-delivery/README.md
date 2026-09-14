@@ -67,11 +67,17 @@ Asserts every resource carries the six required tags (`group`, `owner`,
 KMS) are checked via their `Name` tag or alias, since their ARN cannot carry a
 prefix.
 
-**The audit can fail.** It selects resources by tag **or** name prefix, so an
-untagged `devops-g1-*` resource is still returned and still flagged — an earlier
-version filtered on `capstone=tillflow` first and so could never fail on the
-condition it exists to catch. Verified by injecting a resource with missing
-`owner`/`service` and an unprefixed `Name`; the audit failed on both, as intended.
+**The audit can fail**, which took two attempts to get right. Filtering on
+`--tag-filters capstone=tillflow` meant an untagged resource was never returned,
+so the audit could not fail on the one condition it exists to check. Selecting by
+name prefix instead was worse on a **shared cohort account** — another team runs
+a `devops-g1-iac-*` stack here, and their untagged resources were reported as our
+violations.
+
+It now reconciles against `terraform state pull`: authoritative about what this
+stack owns, regardless of tags, and blind to other teams' similar names.
+Verified by injecting a resource with missing `owner`/`service` and an unprefixed
+`Name` — the audit failed on both, as intended.
 
 ## 4 · ECS golden path and ADOT sidecar
 
