@@ -29,6 +29,17 @@ variable "name_prefix" {
   default     = "devops-g1"
 }
 
+variable "vpc_cidr" {
+  description = "VPC CIDR. /16 split into /20 subnets across 2 AZs (see network.tf)."
+  type        = string
+  default     = "10.20.0.0/16"
+
+  validation {
+    condition     = can(cidrsubnet(var.vpc_cidr, 4, 0))
+    error_message = "vpc_cidr must be a valid IPv4 CIDR with room for /20 subnets (i.e. /16 or larger)."
+  }
+}
+
 variable "environment" {
   description = "Deployment environment tag."
   type        = string
