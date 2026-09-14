@@ -188,6 +188,20 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # Prints the OIDC token's own claims (never the token). Three trust-policy
+      # guesses failed in a row; the `sub` AWS is actually being offered is the
+      # only thing that settles which value the policy must allow.
+      - name: Show OIDC claims
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          payload=$(cut -d. -f2 <<<"$token")
+          # base64url -> base64, pad to a multiple of 4.
+          payload=$(tr '_-' '/+' <<<"$payload")
+          case $(( ${#payload} % 4 )) in 2) payload="$payload==";; 3) payload="$payload=";; esac
+          echo "$payload" | base64 -d 2>/dev/null \
+            | jq '{sub, aud, repository, repository_owner, ref, event_name, workflow_ref}'
+
       - name: Configure AWS credentials (OIDC, read-only)
         # devops-g1-ci-plan, NOT ci-deploy: a pull_request run must never hold
         # write credentials. ci-deploy's trust policy excludes pull_request for
