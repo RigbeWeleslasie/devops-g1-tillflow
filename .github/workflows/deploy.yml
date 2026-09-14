@@ -220,9 +220,18 @@ jobs:
             --query 'taskDefinition' --output json > td.json
 
           jq --arg img "${{ steps.build.outputs.image }}" \
-             --arg svc "${{ matrix.service }}" '
+             --arg svc "${{ matrix.service }}" \
+             --arg digest "${{ steps.build.outputs.digest }}" '
             .containerDefinitions = (
-              .containerDefinitions | map(if .name == $svc then .image = $img else . end)
+              .containerDefinitions | map(
+                if .name == $svc then
+                  .image = $img
+                  | .environment = (
+                      [ (.environment // [])[] | select(.name != "IMAGE_DIGEST") ]
+                      + [{ name: "IMAGE_DIGEST", value: $digest }]
+                    )
+                else . end
+              )
             )
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                   .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)

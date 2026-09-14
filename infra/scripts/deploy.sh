@@ -74,9 +74,20 @@ trap 'rm -rf "$tmp"' EXIT
 aws ecs describe-task-definition --task-definition "${PREFIX}-${SERVICE}" \
   --query 'taskDefinition' --output json > "$tmp/td.json"
 
-jq --arg img "$image" --arg svc "$SERVICE" '
+# The digest only exists after the push, so it cannot be a build arg -- it is
+# injected here, which is also where the deployed truth lives. /version then
+# reports both the commit and the exact image running.
+jq --arg img "$image" --arg svc "$SERVICE" --arg digest "$digest" '
   .containerDefinitions = (
-    .containerDefinitions | map(if .name == $svc then .image = $img else . end)
+    .containerDefinitions | map(
+      if .name == $svc then
+        .image = $img
+        | .environment = (
+            [ (.environment // [])[] | select(.name != "IMAGE_DIGEST") ]
+            + [{ name: "IMAGE_DIGEST", value: $digest }]
+          )
+      else . end
+    )
   )
   | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
         .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
