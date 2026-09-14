@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and fill in the capstone AWS account id.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored. The account id is not a secret, but pinning it
+# here is what stops an apply from landing in the wrong account.
+#
+# Find it with:  aws sts get-caller-identity --profile devops-lab-new --query Account --output text
+
+aws_account_id = "000000000000"
