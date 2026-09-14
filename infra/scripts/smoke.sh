@@ -22,6 +22,46 @@ SLEEP="${SLEEP:-10}"
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 
+# `commission` is a worker: no target group, no listener rule (edge.tf). A
+# /commission/* request would fall through to the web_default rule and read
+# WEB's /version -- passing for the wrong reason and hiding a broken deploy.
+# Verify it through ECS instead.
+if [[ "$SERVICE" == "commission" ]]; then
+  echo "commission is a worker (no ingress) — verifying via ECS, not HTTP"
+
+  read -r desired running <<<"$(aws ecs describe-services \
+    --cluster "${CLUSTER:-$PREFIX}" --services "${PREFIX}-${SERVICE}" \
+    --query 'services[0].[desiredCount,runningCount]' --output text)"
+
+  if [[ "$running" != "$desired" ]]; then
+    red "FAIL  ${SERVICE}: running=$running desired=$desired"
+    exit 1
+  fi
+
+  if [[ -n "$EXPECTED_SHA" ]]; then
+    # The deployed artifact must be the commit we built. The image is deployed
+    # by digest, so compare against the digest that SHA tag resolves to.
+    want="$(aws ecr describe-images --repository-name "${PREFIX}/${SERVICE}" \
+      --image-ids "imageTag=${EXPECTED_SHA}" \
+      --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo '')"
+    got="$(aws ecs describe-task-definition \
+      --task-definition "${PREFIX}-${SERVICE}" \
+      --query "taskDefinition.containerDefinitions[?name=='${SERVICE}'].image | [0]" \
+      --output text)"
+
+    if [[ -z "$want" || "$got" != *"$want"* ]]; then
+      red "FAIL  ${SERVICE}: task definition image '$got' is not digest '$want'"
+      exit 1
+    fi
+    green "PASS  ${SERVICE}: running=$running, image pinned to ${EXPECTED_SHA:0:12}"
+  else
+    green "PASS  ${SERVICE}: running=$running/$desired"
+  fi
+
+  green "SMOKE PASSED — $SERVICE"
+  exit 0
+fi
+
 api="$(aws apigatewayv2 get-apis \
   --query "Items[?Name=='${PREFIX}'].ApiEndpoint | [0]" --output text)"
 
@@ -30,6 +70,8 @@ if [[ -z "$api" || "$api" == "None" ]]; then
   exit 1
 fi
 
+# The app strips this prefix itself (services/_shared/docker/app.js): API
+# Gateway's ANY /{proxy+} and the ALB listener rules both forward the raw path.
 base="${api}/${SERVICE}"
 echo "smoking $base"
 echo

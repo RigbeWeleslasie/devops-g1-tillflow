@@ -216,23 +216,33 @@ jobs:
           set -e
           tail -c 60000 plan.txt > plan-trunc.txt
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          cat plan.txt
+          # Not `cat plan.txt`: job logs are readable by anyone with repo access,
+          # and a plan can echo sensitive computed values. The PR comment below
+          # carries the reviewable output.
+          grep -E '^(Plan:|No changes|Error)' plan.txt || true
           exit $code
 
-      # The plan is the reviewable artifact; main re-plans against the same
-      # commit before applying (plan/apply parity).
-      - name: Upload plan
+      # The binary plan file is deliberately NOT uploaded.
+      #
+      # `infra/tfplan` embeds every computed value, including
+      # random_password.db_master in cleartext -- anyone with repo read access
+      # could download the artifact and read the database password. Only the
+      # text plan is published, and Terraform redacts sensitive values there.
+      #
+      # main re-plans against the same commit before applying, so plan/apply
+      # parity does not depend on shipping the binary plan between jobs.
+      - name: Upload plan (text only)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.sha }}
-          path: |
-            infra/tfplan
-            plan.txt
+          path: plan.txt
           retention-days: 14
 
       - name: Comment plan on PR
-        if: always()
+        # Only when the plan step actually produced a file. Under always() a
+        # failing fmt/init/validate dies here with ENOENT and masks the real error.
+        if: always() && hashFiles('plan-trunc.txt') != ''
         uses: actions/github-script@v7
         with:
           script: |

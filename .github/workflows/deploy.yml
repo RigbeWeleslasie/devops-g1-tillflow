@@ -138,41 +138,76 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           REPO="$REGISTRY/devops-g1/${{ matrix.service }}"
-          docker build --platform linux/amd64 --provenance=false \
-            --build-arg COMMIT_SHA=${{ github.sha }} \
-            --build-arg SERVICE_NAME=${{ matrix.service }} \
-            -t "$REPO:${{ github.sha }}" \
-            services/_shared/docker
-          docker push "$REPO:${{ github.sha }}"
 
-          # Resolve the immutable digest -- what we actually deploy.
-          digest=$(aws ecr describe-images \
+          # ECR repos are IMMUTABLE, so pushing a tag that already exists fails.
+          # That is the point of immutability -- but it must not stop a re-run of
+          # a failed deploy, or a redeploy of the same commit. If the tag is
+          # already there, the artifact for this commit exists: reuse it.
+          existing=$(aws ecr describe-images \
             --repository-name "devops-g1/${{ matrix.service }}" \
             --image-ids imageTag=${{ github.sha }} \
-            --query 'imageDetails[0].imageDigest' --output text)
+            --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo '')
+
+          if [ -n "$existing" ] && [ "$existing" != "None" ]; then
+            echo "image for ${{ github.sha }} already in ECR — reusing $existing"
+            digest="$existing"
+          else
+            docker build --platform linux/amd64 --provenance=false \
+              --build-arg COMMIT_SHA=${{ github.sha }} \
+              --build-arg SERVICE_NAME=${{ matrix.service }} \
+              -t "$REPO:${{ github.sha }}" \
+              services/_shared/docker
+            docker push "$REPO:${{ github.sha }}"
+
+            # Resolve the immutable digest -- what we actually deploy.
+            digest=$(aws ecr describe-images \
+              --repository-name "devops-g1/${{ matrix.service }}" \
+              --image-ids imageTag=${{ github.sha }} \
+              --query 'imageDetails[0].imageDigest' --output text)
+          fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "image=$REPO@$digest" >> "$GITHUB_OUTPUT"
           echo "deploying $REPO@$digest"
 
-      - name: Wait for ECR enhanced scan
+      # Fails CLOSED. A timed-out or errored describe used to yield `{}` -> 0
+      # findings -> pass, so the security gate was weakest exactly when the scan
+      # was least trustworthy. An unknown result is now a failure.
+      - name: ECR enhanced scan gate (fail on HIGH/CRITICAL)
         run: |
+          set -euo pipefail
+          status=UNKNOWN
           for i in $(seq 1 30); do
             status=$(aws ecr describe-image-scan-findings \
               --repository-name "devops-g1/${{ matrix.service }}" \
               --image-id imageDigest=${{ steps.build.outputs.digest }} \
               --query 'imageScanStatus.status' --output text 2>/dev/null || echo PENDING)
-            [ "$status" = "COMPLETE" ] && break
-            [ "$status" = "FAILED" ] && { echo "::warning::scan failed"; break; }
+            case "$status" in
+              COMPLETE|ACTIVE) break ;;
+              FAILED) echo "::error::ECR scan FAILED for this image"; exit 1 ;;
+            esac
             sleep 10
           done
+
+          if [ "$status" != "COMPLETE" ] && [ "$status" != "ACTIVE" ]; then
+            echo "::error::scan did not complete (last status: $status) — failing closed"
+            exit 1
+          fi
+
           counts=$(aws ecr describe-image-scan-findings \
             --repository-name "devops-g1/${{ matrix.service }}" \
             --image-id imageDigest=${{ steps.build.outputs.digest }} \
-            --query 'imageScanFindingsSummary.findingSeverityCounts' --output json 2>/dev/null || echo '{}')
+            --query 'imageScanFindingsSummary.findingSeverityCounts' --output json) \
+            || { echo "::error::could not read scan findings — failing closed"; exit 1; }
+
           echo "findings: $counts"
-          crit=$(echo "$counts" | jq -r '.CRITICAL // 0')
-          if [ "$crit" -gt 0 ]; then
-            echo "::error::$crit CRITICAL finding(s) in the image"; exit 1
+          crit=$(jq -r '.CRITICAL // 0' <<<"$counts")
+          high=$(jq -r '.HIGH // 0' <<<"$counts")
+
+          # The brief: fail on fixable HIGH/CRITICAL. Accepted risk is recorded
+          # with an owner and an expiry in docs/threat-model.md, not waved through.
+          if [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then
+            echo "::error::$crit CRITICAL / $high HIGH finding(s) in the image"
+            exit 1
           fi
 
       # Register a new revision pointing at the digest, leaving the rest of the
@@ -201,11 +236,13 @@ jobs:
 
       - name: Deploy
         run: |
+          # No --desired-count: capacity is Terraform's (var.service_desired_count),
+          # and forcing a number here would silently undo any scaling between
+          # deploys. A deploy changes the image, not the size of the fleet.
           aws ecs update-service \
             --cluster "$CLUSTER" \
             --service "devops-g1-${{ matrix.service }}" \
-            --task-definition "${{ steps.register.outputs.task_definition }}" \
-            --desired-count 2 >/dev/null
+            --task-definition "${{ steps.register.outputs.task_definition }}" >/dev/null
 
           # The service has a deployment circuit breaker with rollback enabled,
           # so a failing rollout reverts on its own; this just waits it out.
@@ -214,25 +251,7 @@ jobs:
 
       - name: Post-deploy smoke — assert the running SHA is the built SHA
         id: smoke
-        run: |
-          api=$(aws apigatewayv2 get-apis \
-            --query "Items[?Name=='devops-g1'].ApiEndpoint | [0]" --output text)
-          echo "api: $api"
-
-          ok=false
-          for i in $(seq 1 12); do
-            body=$(curl -fsS --max-time 10 "$api/${{ matrix.service }}/version" 2>/dev/null || echo '{}')
-            sha=$(echo "$body" | jq -r '.sha // empty')
-            echo "attempt $i: $body"
-            if [ "$sha" = "${{ github.sha }}" ]; then ok=true; break; fi
-            sleep 10
-          done
-
-          if ! $ok; then
-            echo "::error::smoke failed — /version did not report ${{ github.sha }}"
-            exit 1
-          fi
-          echo "smoke passed: running ${{ github.sha }}"
+        run: ./infra/scripts/smoke.sh "${{ matrix.service }}" "${{ github.sha }}"
 
       # Belt and braces: the circuit breaker handles a failed rollout, this
       # handles a rollout that succeeded but failed the smoke test.

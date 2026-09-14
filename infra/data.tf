@@ -195,6 +195,10 @@ resource "aws_db_instance" "main" {
   maintenance_window      = "sun:03:30-sun:04:30"
   copy_tags_to_snapshot   = true
 
+  # Verified supported on db.t4g.small (the applied instance reports
+  # PerformanceInsightsEnabled: true). PI is unavailable on the smaller
+  # burstable classes -- db.t2/t3.micro -- not on t4g.small. Kept because the
+  # CPU-credit and load story is what the k6 bottleneck analysis rests on (G3).
   performance_insights_enabled    = true
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
@@ -419,28 +423,65 @@ resource "aws_scheduler_schedule" "daily_close" {
 # Task-role access to the data tier
 # ---------------------------------------------------------------------------
 
+# Who may read from which queue, and who may write to it. Derived from the flows
+# in docs/architecture.md §4: payments publishes sale.paid and requests B2C; pos
+# consumes sale.paid to move a sale to PAID; commission consumes payout jobs from
+# the EventBridge daily close.
+#
+# A DLQ is consumable only by the service that owns the source queue -- redriving
+# someone else's dead letters is the same capability as draining their queue.
+locals {
+  queue_consume = {
+    web        = []
+    pos        = [aws_sqs_queue.main["sale-events"].arn, aws_sqs_queue.dlq["sale-events"].arn]
+    payments   = []
+    commission = [aws_sqs_queue.main["commission-payout"].arn, aws_sqs_queue.dlq["commission-payout"].arn]
+  }
+
+  queue_produce = {
+    web = []
+    # pos requests a charge through the Payments API (HTTP), not a queue.
+    pos = []
+    # payments publishes sale.paid after a callback confirms payment.
+    payments = [aws_sqs_queue.main["sale-events"].arn]
+    # commission re-enqueues its own work on retry; B2C goes through the
+    # Payments API, never Daraja directly (architecture.md §3, hard rule).
+    commission = [aws_sqs_queue.main["commission-payout"].arn]
+  }
+}
+
 data "aws_iam_policy_document" "task_data" {
   for_each = toset(local.services)
 
-  # Queue access follows ownership: pos consumes sale events, commission
-  # consumes payout jobs, payments publishes both.
+  # Queue access follows ownership, per queue and per direction.
+  #
+  # Granting every non-web task send+receive+delete on ALL queues would let `pos`
+  # drain commission-payout and its DLQ -- exactly the lateral movement
+  # docs/threat-model.md line 48 exists to prevent. Consumers may receive and
+  # delete on their own queue; producers may only send to someone else's.
   dynamic "statement" {
-    for_each = each.key == "web" ? [] : [1]
+    for_each = length(local.queue_consume[each.key]) > 0 ? [1] : []
     content {
-      sid    = "QueueAccess"
+      sid    = "ConsumeOwnQueues"
       effect = "Allow"
       actions = [
         "sqs:ReceiveMessage",
         "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
         "sqs:GetQueueAttributes",
         "sqs:GetQueueUrl",
-        "sqs:SendMessage",
-        "sqs:ChangeMessageVisibility",
       ]
-      resources = concat(
-        [for q in aws_sqs_queue.main : q.arn],
-        [for q in aws_sqs_queue.dlq : q.arn],
-      )
+      resources = local.queue_consume[each.key]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.queue_produce[each.key]) > 0 ? [1] : []
+    content {
+      sid       = "ProduceToQueues"
+      effect    = "Allow"
+      actions   = ["sqs:SendMessage", "sqs:GetQueueUrl"]
+      resources = local.queue_produce[each.key]
     }
   }
 
@@ -450,10 +491,13 @@ data "aws_iam_policy_document" "task_data" {
   dynamic "statement" {
     for_each = each.key == "web" ? [] : [1]
     content {
-      sid       = "ReadOwnDbSecret"
-      effect    = "Allow"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = [aws_secretsmanager_secret.service_db[each.key].arn]
+      sid     = "ReadOwnDbSecret"
+      effect  = "Allow"
+      actions = ["secretsmanager:GetSecretValue"]
+      resources = [
+        aws_secretsmanager_secret.service_db[each.key].arn,
+        aws_secretsmanager_secret.service_db_password[each.key].arn,
+      ]
     }
   }
 

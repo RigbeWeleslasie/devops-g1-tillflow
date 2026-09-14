@@ -161,6 +161,14 @@ resource "aws_secretsmanager_secret" "service_db" {
 # The per-service roles and their passwords are created by the migration job in
 # G2 (ADR 0003). Until then the entry carries connection details only, so the
 # grant resolves and the shape is fixed.
+#
+# Connection details and the password are split into two secrets on purpose.
+# Holding both in one entry forces a choice between two broken options:
+# `ignore_changes` freezes the endpoint, so after an instance replacement every
+# service keeps dialling a host that no longer exists and no plan shows it; and
+# without it, Terraform overwrites the migration job's password on every apply.
+# Splitting them lets Terraform own the endpoint (which it knows) and the
+# migration job own the credential (which it knows).
 resource "aws_secretsmanager_secret_version" "service_db" {
   for_each = toset(local.services)
 
@@ -173,8 +181,34 @@ resource "aws_secretsmanager_secret_version" "service_db" {
     # concern owned by Payments (docs/architecture.md §3).
     schema   = each.key == "commission" ? "payments" : each.key
     username = "${local.prefix}-${each.key == "commission" ? "payments" : each.key}-app"
-    password = "PLACEHOLDER_SET_BY_MIGRATION_JOB"
+    # No password here -- see aws_secretsmanager_secret.service_db_password.
   })
+
+  # No ignore_changes: the endpoint must track the instance.
+}
+
+# The credential itself, written by the G2 migration job and never by Terraform.
+resource "aws_secretsmanager_secret" "service_db_password" {
+  for_each = toset(local.services)
+
+  name        = "${local.prefix}/${each.key}/db-password"
+  description = "Runtime DB password for ${each.key}; set by the migration job (ADR 0003)"
+  kms_key_id  = aws_kms_key.secrets.arn
+
+  recovery_window_in_days = 0
+
+  tags = {
+    Name    = "${local.prefix}-${each.key}-db-password"
+    service = each.key
+    owner   = local.service_owner[each.key]
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "service_db_password" {
+  for_each = toset(local.services)
+
+  secret_id     = aws_secretsmanager_secret.service_db_password[each.key].id
+  secret_string = jsonencode({ password = "PLACEHOLDER_SET_BY_MIGRATION_JOB" })
 
   lifecycle {
     ignore_changes = [secret_string]
