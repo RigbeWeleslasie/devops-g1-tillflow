@@ -178,20 +178,23 @@ data "aws_iam_policy_document" "ci_plan_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # GitHub's `sub` claim is not always `:pull_request`. A workflow run on a
-    # branch -- including the same run re-triggered by a push -- sends
-    # `ref:refs/heads/<branch>` instead, and the role then cannot be assumed at
-    # all ("Not authorized to perform sts:AssumeRoleWithWebIdentity"). Both
-    # shapes are accepted here; the scope that matters is the repository, and
-    # this role is read-only either way (ReadOnlyAccess + the object-read deny).
-    # Write access stays on ci_deploy, whose trust excludes pull_request.
+    # Any workflow run in THIS repository, whatever the trigger.
+    #
+    # Enumerating `sub` shapes (`:pull_request`, `:ref:refs/heads/*`) kept failing
+    # with "Not authorized to perform sts:AssumeRoleWithWebIdentity" -- GitHub
+    # emits more variants than are obvious (pull_request_target, merge groups,
+    # environments, tags), and a claim that is not listed cannot assume the role
+    # at all. The repository is the boundary that actually matters here; this
+    # role is read-only regardless of which workflow assumes it (ReadOnlyAccess
+    # plus the object-read deny below).
+    #
+    # The write role is where trigger-scoping belongs, and ci_deploy still pins
+    # `ref:refs/heads/main` and `environment:prod` -- so a pull_request run can
+    # read, and can never apply.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repository}:pull_request",
-        "repo:${var.github_repository}:ref:refs/heads/*",
-      ]
+      values   = ["repo:${var.github_repository}:*"]
     }
   }
 }
