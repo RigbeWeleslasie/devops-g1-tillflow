@@ -40,3 +40,20 @@ variable "group" {
   type        = string
   default     = "g1"
 }
+
+variable "state_bucket_extra_principal_arns" {
+  description = <<-EOT
+    Extra IAM principal ARNs allowed to read/write the Terraform state bucket,
+    beyond account root, the ci-deploy/ci-plan roles (infra/iam.tf), and
+    whoever runs the current apply (always self-included -- see the comment
+    on local.allowed_state_principals). Self-inclusion only covers THIS
+    session, though: an assumed-role/SSO session gets a new ARN every login,
+    so returning across sessions needs a STABLE identity pinned here (an IAM
+    user ARN, or the SSO permission-set role ARN covering all its sessions)
+    for the first manual `terraform init -migrate-state` on the main stack to
+    keep working before ci-deploy exists. Example: your admin role's ARN in
+    terraform.tfvars. Leave empty once CI is the only thing that touches state.
+  EOT
+  type        = list(string)
+  default     = []
+}

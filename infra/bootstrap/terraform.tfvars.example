@@ -7,3 +7,9 @@
 # Find it with:  aws sts get-caller-identity --profile devops-lab-new --query Account --output text
 
 aws_account_id = "000000000000"
+
+# Optional: your own IAM role/user ARN, so the first manual
+# `terraform init -migrate-state` on the main stack can still write state
+# before the ci-deploy role exists. Leave empty (or omit) once CI is the only
+# thing that touches state -- the bucket policy denies everyone else.
+# state_bucket_extra_principal_arns = ["arn:aws:iam::000000000000:user/rigbe"]

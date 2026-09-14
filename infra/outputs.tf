@@ -40,3 +40,13 @@ output "nat_public_ips" {
   description = "NAT egress IPs — the addresses Daraja sees from us."
   value       = [for e in aws_eip.nat : e.public_ip]
 }
+
+output "ci_deploy_role_arn" {
+  description = "Role deploy.yml assumes on push to main / the prod environment. Never usable from a pull_request run."
+  value       = aws_iam_role.ci_deploy.arn
+}
+
+output "ci_plan_role_arn" {
+  description = "Read-only role pr-checks.yml's infra-plan job assumes on pull_request."
+  value       = aws_iam_role.ci_plan.arn
+}

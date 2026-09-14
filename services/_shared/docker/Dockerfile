@@ -17,10 +17,15 @@ WORKDIR /app
 # deps — separate stage so dependency installation caches independently of source
 # ---------------------------------------------------------------------------
 FROM base AS deps
-COPY package*.json ./
-# No dependencies yet; `npm ci` would fail without a lockfile. Kept as the seam
-# where services add theirs.
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; fi
+# package.json is required (this build's reference service ships one); the
+# lockfile glob is optional so services that haven't added one yet still
+# build -- a bare `package*.json` glob errors when it matches nothing, so the
+# required and optional files are listed as separate sources.
+COPY package.json package-lock.json* ./
+# No dependencies yet; `npm ci` would fail without a lockfile. `mkdir -p` makes
+# node_modules exist either way, so the runtime stage's COPY below never fails
+# on a missing directory once a real service adds a lockfile.
+RUN mkdir -p node_modules && if [ -f package-lock.json ]; then npm ci --omit=dev; fi
 
 # ---------------------------------------------------------------------------
 # runtime
@@ -42,8 +47,8 @@ ENV NODE_ENV=production \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
     OTEL_SERVICE_NAME=${SERVICE_NAME}
 
-COPY --from=deps /app/node_modules* /app/node_modules/
-COPY app.js ./
+COPY --from=deps /app/node_modules ./node_modules/
+COPY package.json app.js ./
 
 # Run as a non-root user that owns nothing writable. `node` (uid 1000) ships
 # with the base image.

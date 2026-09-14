@@ -86,8 +86,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      - name: Configure AWS credentials (OIDC)
-        run: echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-deploy"
+      - name: Configure AWS credentials (OIDC, read-only)
+        # Assumes devops-g1-ci-plan, NOT devops-g1-ci-deploy: a pull_request run
+        # must never hold write/apply credentials (infra/iam.tf).
+        run: echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-plan"
       - name: terraform fmt -check
         run: terraform -chdir=infra fmt -check -recursive
       - name: terraform init + validate
