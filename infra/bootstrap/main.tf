@@ -47,15 +47,30 @@ locals {
   # (not a resource dependency): ci-deploy/ci-plan are created by the main
   # stack in infra/iam.tf, using this same name prefix, so the ARNs are
   # deterministic even though those roles don't exist at bootstrap time.
-  # Account root is included so a locked-out operator can always recover via
-  # the AWS console/root credentials; var.state_bucket_extra_principal_arns
-  # covers the human operator's own role/user for the first manual
-  # `terraform init -migrate-state` before ci-deploy exists in CI.
+  #
+  # data.aws_caller_identity.current.arn -- whoever is actually running THIS
+  # apply -- is always included. Without it, an operator whose ARN isn't
+  # already on the list locks themselves out the moment this policy first
+  # applies: the Deny below covers s3:*, including s3:PutBucketPolicy, so
+  # undoing the mistake needs the very permission it just removed, leaving
+  # only literal AWS account root (email+password+MFA, not an admin IAM
+  # role/user) able to recover. Self-inclusion means the operator who applies
+  # a change to this policy can never be locked out by that same apply.
+  #
+  # It only protects the CURRENT session, though: assumed-role (SSO) sessions
+  # get a new, different ARN on every login, so a future apply from a new SSO
+  # session recomputes a different current.arn and would itself be blocked by
+  # today's already-deployed policy unless it's covered by one of the stable
+  # entries below. For an operator who returns across multiple sessions,
+  # pin a STABLE identity (an IAM user ARN, or an SSO permission-set role ARN
+  # covering every session from it) via state_bucket_extra_principal_arns
+  # instead of relying on self-inclusion alone.
   allowed_state_principals = concat(
     [
       "arn:aws:iam::${local.account_id}:root",
       "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-deploy",
       "arn:aws:iam::${local.account_id}:role/${var.name_prefix}-ci-plan",
+      data.aws_caller_identity.current.arn,
     ],
     var.state_bucket_extra_principal_arns,
   )

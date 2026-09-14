@@ -215,24 +215,68 @@ resource "aws_iam_role_policy_attachment" "ci_plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
-# ReadOnlyAccess covers describe/get/list everywhere but does not cover
-# reading Terraform state object bytes out of a non-public bucket, which is
-# still just s3:GetObject -- included in ReadOnlyAccess -- so no extra grant
-# is needed here beyond the DynamoDB lock table read below (ReadOnlyAccess
-# already grants dynamodb:GetItem).
-data "aws_iam_policy_document" "ci_plan_state_lock" {
+# ReadOnlyAccess grants s3:GetObject account-wide -- not just on the tfstate
+# bucket, but on every bucket in the account, including artifacts/backups/
+# evidence and anything belonging to other groups sharing this cohort
+# account. A pull_request run from any branch could otherwise read object
+# CONTENTS anywhere, not just infrastructure metadata. Deny object reads
+# everywhere except the one bucket plan genuinely needs to read from.
+data "aws_iam_policy_document" "ci_plan_deny_object_reads" {
   statement {
-    sid       = "TerraformStateLockRead"
+    sid    = "DenyObjectReadsExceptState"
+    effect = "Deny"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:GetObjectAttributes",
+      "s3:GetObjectTagging",
+    ]
+    not_resources = [
+      "arn:aws:s3:::${local.buckets.tfstate}/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_plan_deny_object_reads" {
+  name   = "${local.prefix}-ci-plan-deny-object-reads"
+  role   = aws_iam_role.ci_plan.id
+  policy = data.aws_iam_policy_document.ci_plan_deny_object_reads.json
+}
+
+# The state bucket's CMK is created by infra/bootstrap -- a separate root
+# module with its own state, so it isn't an `aws_kms_key` resource here. A
+# live alias lookup is the correct way to reference it from this stack
+# (not cross-state referencing, which would couple two independent applies).
+data "aws_kms_alias" "state" {
+  name = "alias/${local.prefix}-tfstate"
+}
+
+# ReadOnlyAccess does not cover kms:Decrypt (KMS crypto operations are
+# deliberately excluded from the managed policy, unlike Describe/Get/List) or
+# DynamoDB writes -- and the S3 backend needs both to actually run `plan`:
+# kms:Decrypt to read the SSE-KMS-encrypted state object, and GetItem/
+# PutItem/DeleteItem (not just DescribeTable) to take and release the state
+# lock, since the backend locks even for a read-only plan unless `-lock=false`.
+data "aws_iam_policy_document" "ci_plan_state_access" {
+  statement {
+    sid       = "TerraformStateDecrypt"
     effect    = "Allow"
-    actions   = ["dynamodb:DescribeTable"]
+    actions   = ["kms:Decrypt"]
+    resources = [data.aws_kms_alias.state.target_key_arn]
+  }
+
+  statement {
+    sid       = "TerraformStateLock"
+    effect    = "Allow"
+    actions   = ["dynamodb:DescribeTable", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
     resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/${local.prefix}-tflock"]
   }
 }
 
-resource "aws_iam_role_policy" "ci_plan_state_lock" {
-  name   = "${local.prefix}-ci-plan-state-lock"
+resource "aws_iam_role_policy" "ci_plan_state_access" {
+  name   = "${local.prefix}-ci-plan-state-access"
   role   = aws_iam_role.ci_plan.id
-  policy = data.aws_iam_policy_document.ci_plan_state_lock.json
+  policy = data.aws_iam_policy_document.ci_plan_state_access.json
 }
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,13 @@ resource "aws_s3_bucket" "kms" {
 
   bucket = local.buckets[each.key]
 
+  # Versioned buckets refuse `terraform destroy` once they hold any object
+  # (including old versions) unless force_destroy is set -- and these three
+  # WILL hold objects within a session or two (build artifacts, evidence,
+  # backups). Unlike tfstate (prevent_destroy = true, deliberately protected),
+  # these are meant to go away on `make destroy` between sessions and in G5.
+  force_destroy = true
+
   tags = {
     Name    = local.buckets[each.key]
     service = "platform"
@@ -211,6 +218,10 @@ resource "aws_s3_bucket_policy" "kms" {
 resource "aws_s3_bucket" "logs" {
   bucket = local.buckets.logs
 
+  # See aws_s3_bucket.kms above -- same reasoning, this bucket will hold ALB
+  # access logs within the first session it's enabled in.
+  force_destroy = true
+
   tags = {
     Name    = local.buckets.logs
     service = "platform"
@@ -278,10 +289,40 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
   }
 }
 
-# ELB access-log delivery grant (current AWS-recommended form: the regional
-# log-delivery service principal, not a hardcoded per-region ELB account id)
-# plus the same TLS-only baseline the other buckets carry.
+# ELB access-log delivery grant.
+#
+# ALB access logs are NOT covered by the newer logdelivery.elasticloadbalancing
+# service-principal method in us-east-1 -- that method only applies in regions
+# launched after ELB introduced it, which does not include us-east-1. Here, AWS
+# still requires granting the legacy per-region ELB service account directly
+# (documented in "Access logs for your Application Load Balancer" -> "Bucket
+# permissions"; us-east-1's account id is 127311923021). Without this, aws_lb.main
+# fails with AccessDenied the moment enable_alb_access_logs is true, because
+# there is no principal in this policy the ALB's log delivery actually uses.
+#
+# The service-principal statements are kept alongside it (harmless if unused,
+# and correct for any future region where the stack might move) rather than
+# replaced, so this bucket accepts delivery either way.
 data "aws_iam_policy_document" "logs" {
+  statement {
+    sid    = "ELBAccountWrite"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::127311923021:root"]
+    }
+
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.logs.arn}/alb/AWSLogs/${local.account_id}/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+
   statement {
     sid    = "AWSLogDeliveryWrite"
     effect = "Allow"

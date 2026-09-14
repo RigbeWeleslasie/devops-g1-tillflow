@@ -18,6 +18,58 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-14 — PR #4 review: the review-fixes PR had its own regressions
+- **Area:** infra (S3 log delivery, bootstrap bucket policy, ci-plan IAM)
+- **What happened:** The follow-up PR fixing PR #3's five findings introduced two things
+  that would have made the stack *worse* than `main`, plus left the new `ci-plan` role
+  unable to actually do its job:
+  1. `storage.tf`'s ALB log-delivery grant used only the
+     `logdelivery.elasticloadbalancing.amazonaws.com` service principal. That method isn't
+     valid for ALB in `us-east-1` -- only for regions that post-date it; `us-east-1` still
+     requires the legacy per-region ELB account (`127311923021`). Combined with
+     `enable_alb_access_logs` now defaulting `true`, the very next `aws_lb.main` apply
+     would have failed with AccessDenied.
+  2. `bootstrap/main.tf`'s new `NotPrincipal` Deny on the tfstate bucket had
+     `state_bucket_extra_principal_arns` defaulting to `[]`, with no automatic inclusion of
+     whoever is actually running the apply. First apply would have denied `s3:*` --
+     including `s3:PutBucketPolicy` -- to the operator's own session, leaving only literal
+     AWS root (not an admin IAM role) able to undo it.
+  3. The new `ci-plan` role (`ReadOnlyAccess` + a narrow DynamoDB statement) was missing
+     `kms:Decrypt` for the state CMK (excluded from `ReadOnlyAccess`) and
+     `dynamodb:PutItem`/`DeleteItem` for the state lock (`DescribeTable` alone only reads
+     table metadata, not lock items) -- `terraform plan` would have failed outright on a PR.
+  4. `ReadOnlyAccess` also grants `s3:GetObject` account-wide, not just on the tfstate
+     bucket -- a PR from any branch could read the *contents* of every bucket in the
+     account, not just infrastructure metadata.
+  5. The four `storage.tf` buckets were versioned with no `force_destroy`, so
+     `terraform destroy` would fail the first time any object landed in them (the very
+     next session, for a bucket that exists specifically to be destroyed/rebuilt).
+- **Impact:** Caught in review before merge; zero runtime impact.
+- **Root cause:** Fixes were written and `terraform validate`d against syntax/type
+  correctness, but validate cannot check IAM semantics (which managed-policy actions are
+  actually included, whether a resource-based Deny can strand its own author) or
+  region-specific AWS service behavior (ALB log delivery method). Those need either a real
+  `apply` against the target region, or a second reviewer who already knows the gotcha.
+- **Fix:** Added the `127311923021:root` principal to the logs bucket policy alongside the
+  service-principal statements. Auto-included `data.aws_caller_identity.current.arn` in
+  `local.allowed_state_principals` so the operator running an apply can never be locked out
+  by that same apply (documented that this only covers the current session; a stable ARN
+  via `state_bucket_extra_principal_arns` is still needed across separate SSO logins).
+  Added `kms:Decrypt` (via a live `aws_kms_alias` lookup, since the CMK lives in the
+  separate `bootstrap` state) and the full `GetItem`/`PutItem`/`DeleteItem` set to
+  `ci-plan`. Replaced the account-wide S3 exposure with an explicit Deny scoping object
+  reads to the tfstate bucket only, layered under `ReadOnlyAccess` rather than
+  hand-enumerating every service's read actions. Added `force_destroy = true` to the four
+  non-state buckets.
+- **Prevention:** A reviewer's own review needs review, same as any other change -- this
+  round came from a second pass over the fix commit, not from tooling. Region-specific AWS
+  behavior (ALB log delivery, service-account IDs) is exactly the class of thing
+  `terraform validate` cannot catch; a first real `apply` in the target region remains the
+  actual test, still pending.
+- **Owner:** Meron (review), fixes applied by Rigbe
+
+---
+
 ### 2026-09-14 — PR #3 review: OIDC trust policy over-scoped, three landmines in the golden path
 - **Area:** infra (IAM/OIDC), services/_shared (Docker), infra (S3/edge)
 - **What happened:** Code review of the G1 golden-path PR (VPC, ECS, ALB/API GW, IAM OIDC,
