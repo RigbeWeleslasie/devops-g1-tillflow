@@ -221,11 +221,24 @@ jobs:
       - name: terraform validate
         run: terraform -chdir=infra validate -no-color
 
+      # `-refresh=false`, deliberately.
+      #
+      # A refresh re-reads every resource from AWS, including
+      # secretsmanager_secret_version -- which means calling GetSecretValue on
+      # the Daraja credentials, the Slack webhook and the DB passwords. The
+      # read-only PR role cannot do that, and it SHOULD NOT: granting a role that
+      # any pull request can assume the ability to read production secrets would
+      # be a far worse trade than a slightly staler plan.
+      #
+      # What is lost: drift that happened outside Terraform will not appear in
+      # the PR plan. That is acceptable here because the plan is a review aid,
+      # not the authority -- deploy.yml re-plans WITH refresh under ci-deploy on
+      # main before applying, so the applied plan is always refresh-accurate.
       - name: terraform plan
         id: plan
         run: |
           set +e
-          terraform -chdir=infra plan -input=false -no-color -out=tfplan > plan.txt 2>&1
+          terraform -chdir=infra plan -input=false -no-color -refresh=false -out=tfplan > plan.txt 2>&1
           code=$?
           set -e
           tail -c 60000 plan.txt > plan-trunc.txt
