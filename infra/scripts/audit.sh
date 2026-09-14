@@ -66,10 +66,28 @@ echo
 
 echo "== Tag audit =="
 
-resources_json="$(aws resourcegroupstaggingapi get-resources \
-  --region "$REGION" \
-  --tag-filters "Key=capstone,Values=tillflow" \
-  --output json)"
+# Fetch EVERY tagged resource in the region, not just ones already carrying
+# capstone=tillflow.
+#
+# Filtering on the tag first makes the audit unable to fail on its own subject: a
+# resource missing `capstone` is simply not returned, so a missing required tag
+# is invisible to the check that exists to catch it. Instead, pull everything and
+# select ours by the name prefix as well as the tag -- a devops-g1-* resource
+# that is missing tags then still shows up, and still fails.
+all_json="$(aws resourcegroupstaggingapi get-resources \
+  --region "$REGION" --output json)"
+
+resources_json="$(jq --arg p "$PREFIX" '
+  .ResourceTagMappingList |= map(
+    select(
+      # ours by tag ...
+      ((.Tags // []) | map({(.Key): .Value}) | add // {} | .capstone == "tillflow")
+      # ... or ours by name, which is how an untagged resource gets caught.
+      or (.ResourceARN | contains($p))
+      or (((.Tags // []) | map({(.Key): .Value}) | add // {} | .Name // "") | startswith($p))
+    )
+  )
+' <<<"$all_json")"
 
 count="$(jq '.ResourceTagMappingList | length' <<<"$resources_json")"
 

@@ -345,13 +345,18 @@ resource "aws_ecs_task_definition" "service" {
         startPeriod = 10
       }
 
-      # No `dependsOn` on the sidecar.
+      # Order startup without coupling liveness.
       #
-      # Tempting, so that telemetry is never dropped at startup -- but the
-      # collector is `essential = false`, and ECS stops a task whose dependency
-      # target has exited. That couples application availability to the
-      # observability sidecar: exactly backwards. The OTLP exporter buffers and
-      # retries, so a few early spans are the worst case if the app wins the race.
+      # `condition = "START"` only waits for the collector process to start; it
+      # does not tie the app's lifetime to the sidecar's. That distinction
+      # matters: a stronger condition (HEALTHY/COMPLETE) on a non-essential
+      # container is what makes ECS tear the task down when the sidecar exits.
+      # START gives the OTLP listener a head start so early spans are not
+      # dropped, while a later collector crash still leaves the app serving.
+      dependsOn = [{
+        containerName = "adot"
+        condition     = "START"
+      }]
     },
 
     # --- ADOT collector sidecar -------------------------------------------
@@ -368,6 +373,18 @@ resource "aws_ecs_task_definition" "service" {
         name      = "AOT_CONFIG_CONTENT"
         valueFrom = aws_ssm_parameter.adot_config.arn
       }]
+
+      # Exec form, not CMD-SHELL: the collector image is distroless -- no shell,
+      # no curl, no wget. `/healthcheck` is the binary the image ships for this.
+      # Without a health check there is no signal the collector actually booted,
+      # which the G1 gate asks for ("sidecar boot").
+      healthCheck = {
+        command     = ["CMD", "/healthcheck"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 10
+      }
 
       portMappings = [
         { containerPort = 4317, protocol = "tcp", name = "otlp-grpc" },

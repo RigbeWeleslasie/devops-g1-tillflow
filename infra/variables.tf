@@ -40,16 +40,6 @@ variable "github_repository" {
   }
 }
 
-variable "create_github_oidc_provider" {
-  description = <<-EOT
-    Create the account-wide GitHub OIDC provider, or adopt an existing one.
-    The cohort account is shared, so another group may already have created it;
-    it can only exist once per account.
-  EOT
-  type        = bool
-  default     = false
-}
-
 variable "vpc_cidr" {
   description = "VPC CIDR. /16 split into /20 subnets across 2 AZs (see network.tf)."
   type        = string
@@ -116,6 +106,65 @@ variable "service_desired_count" {
     payments   = 0
     commission = 0
   }
+}
+
+# --- data tier (ADR 0003) --------------------------------------------------
+
+variable "db_engine_version" {
+  description = "PostgreSQL major version (ADR 0003: 16.x, latest minor at apply)."
+  type        = string
+  default     = "16"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class. Burstable Graviton; revisit after k6 (G3)."
+  type        = string
+  default     = "db.t4g.small"
+}
+
+variable "db_multi_az" {
+  description = <<-EOT
+    Multi-AZ (synchronous standby). ADR 0003 requires it for the RPO~0 story and
+    the G4 AZ-failure drill. Set false only to cut cost while iterating, and say
+    so in the PR -- it changes the durability claim the SLOs rest on.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "db_backup_retention_days" {
+  description = "Automated backup retention (ADR 0003: 7 days, RPO <= 5 min)."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.db_backup_retention_days >= 1
+    error_message = "Retention must be at least 1 day; 0 disables automated backups and breaks the RPO claim in ADR 0003."
+  }
+}
+
+variable "db_name" {
+  description = "Initial database name."
+  type        = string
+  default     = "tillflow"
+}
+
+variable "db_master_username" {
+  description = "RDS master username. Per-service least-privilege roles are created by the migration job (ADR 0003)."
+  type        = string
+  default     = "tillflow_admin"
+}
+
+variable "redis_engine_version" {
+  description = "ElastiCache Valkey engine version."
+  type        = string
+  default     = "8.0"
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache node type. Sized after k6 (G3)."
+  type        = string
+  default     = "cache.t4g.micro"
 }
 
 # --- edge ------------------------------------------------------------------

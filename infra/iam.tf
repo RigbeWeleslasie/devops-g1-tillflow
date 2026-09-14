@@ -7,28 +7,18 @@
 # repository so another repo presenting a valid GitHub token still cannot assume it.
 
 data "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 0 : 1
-  url   = "https://token.actions.githubusercontent.com"
+  url = "https://token.actions.githubusercontent.com"
 }
 
-# The provider is account-wide. On a shared cohort account another group may have
-# created it already, so it is adopted when present rather than duplicated.
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 1 : 0
-
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-
-  tags = {
-    Name    = "${local.prefix}-github-oidc"
-    service = "platform"
-    owner   = "meron"
-  }
-}
-
+# Adopt only -- never create.
+#
+# The provider is account-wide and already exists on this shared cohort account
+# (another group created it). A create path would call
+# iam:CreateOpenIDConnectProvider, which the permission set denies, so the only
+# thing that branch could ever produce is a confusing failure. Removing it makes
+# the deny path unreachable rather than merely defaulted-off.
 locals {
-  github_oidc_arn = var.create_github_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : one(data.aws_iam_openid_connect_provider.github[*].arn)
+  github_oidc_arn = data.aws_iam_openid_connect_provider.github.arn
 }
 
 # ---------------------------------------------------------------------------
