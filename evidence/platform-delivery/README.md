@@ -117,6 +117,25 @@ The smoke test asserts `/version.sha` equals the commit that was built — a dep
 that "succeeded" while leaving the previous image running fails here. The
 pipeline rolls back to the previous task definition on that failure.
 
+## 5b · Image scanning — fail on fixable HIGH/CRITICAL
+
+```bash
+trivy image <image> --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln
+# ZERO fixable HIGH/CRITICAL
+```
+
+The first scan reported 13 findings. Only two were the base OS (an openssl
+advisory in libcrypto3/libssl3); the rest -- tar, pacote, sigstore,
+brace-expansion, picomatch, ip-address -- were **npm's own vendored
+dependencies**, being scanned inside a production image that never runs a
+package manager.
+
+Fixed at the root rather than suppressed: `apk upgrade` patches the OS packages
+at build time (keeping the digest pin, which would otherwise freeze whatever CVEs
+the base shipped with), and npm/yarn/corepack are deleted from the runtime stage.
+Dependencies are installed in the `deps` stage and copied in, so nothing in the
+runtime needs them. The findings that remain after that are real ones.
+
 ## 6 · Account guard
 
 The workstation's `default` profile points at an unrelated account. The provider
