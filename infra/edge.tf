@@ -27,10 +27,10 @@ resource "aws_security_group" "alb" {
 resource "aws_vpc_security_group_ingress_rule" "alb_from_vpclink" {
   security_group_id            = aws_security_group.alb.id
   referenced_security_group_id = aws_security_group.vpclink.id
-  from_port                    = 443
-  to_port                      = 443
+  from_port                    = 80
+  to_port                      = 80
   ip_protocol                  = "tcp"
-  description                  = "HTTPS from the API Gateway VPC Link"
+  description                  = "HTTP from the API Gateway VPC Link (internal hop)"
 
   tags = {
     Name    = "${local.prefix}-alb-from-vpclink"
@@ -77,46 +77,6 @@ resource "aws_lb" "main" {
   }
 }
 
-# Self-signed certificate for the VPC Link -> ALB hop.
-#
-# This link is internal to the VPC and API Gateway does not validate the ALB's
-# certificate on a VPC Link connection, so a public CA would add cost and a
-# renewal dependency for no security gain. Public TLS terminates at API Gateway,
-# which presents an AWS-managed certificate.
-resource "tls_private_key" "alb" {
-  algorithm = "RSA"
-  rsa_bits  = 2048
-}
-
-resource "tls_self_signed_cert" "alb" {
-  private_key_pem = tls_private_key.alb.private_key_pem
-
-  subject {
-    common_name  = "${local.prefix}-alb.internal"
-    organization = "TillFlow devops-g1"
-  }
-
-  validity_period_hours = 8760 # 1 year
-  early_renewal_hours   = 720
-
-  allowed_uses = ["key_encipherment", "digital_signature", "server_auth"]
-}
-
-resource "aws_acm_certificate" "alb" {
-  private_key      = tls_private_key.alb.private_key_pem
-  certificate_body = tls_self_signed_cert.alb.cert_pem
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = {
-    Name    = "${local.prefix}-alb-internal"
-    service = "platform"
-    owner   = "meron"
-  }
-}
-
 # One target group per HTTP service (commission is a worker: no inbound traffic).
 resource "aws_lb_target_group" "service" {
   for_each = toset([for s in local.services : s if s != "commission"])
@@ -154,12 +114,20 @@ resource "aws_lb_target_group" "service" {
   }
 }
 
+# HTTP, not HTTPS, on the internal hop.
+#
+# API Gateway validates the certificate chain of a private integration target,
+# and a self-signed cert has no chain to validate -- every request failed in
+# ~10ms with a bare 500 and an empty integrationError. A public CA cert would
+# need a real domain and DNS validation for a listener that is unreachable from
+# outside the VPC. Public TLS terminates at API Gateway; this hop is protected
+# by the SG pairing instead (ALB accepts the VPC Link SG only, and the ALB has
+# no public IP), which is the control docs/threat-model.md line 47 actually
+# names. Revisit if the capstone acquires a domain.
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate.alb.arn
+  port              = 80
+  protocol          = "HTTP"
 
   # Unrouted paths are rejected at the edge rather than reaching a service.
   default_action {
@@ -248,10 +216,10 @@ resource "aws_security_group" "vpclink" {
 resource "aws_vpc_security_group_egress_rule" "vpclink_to_alb" {
   security_group_id            = aws_security_group.vpclink.id
   referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = 443
-  to_port                      = 443
+  from_port                    = 80
+  to_port                      = 80
   ip_protocol                  = "tcp"
-  description                  = "To the internal ALB"
+  description                  = "To the internal ALB (internal hop)"
 
   tags = {
     Name    = "${local.prefix}-vpclink-to-alb"
@@ -293,13 +261,19 @@ resource "aws_apigatewayv2_integration" "alb" {
   connection_type = "VPC_LINK"
   connection_id   = aws_apigatewayv2_vpc_link.main.id
 
+  # HTTP_PROXY integrations only support payload format 1.0 (AWS rejects 2.0
+  # outright), unlike the AWS_PROXY/Lambda case where 2.0 is the default.
   payload_format_version = "1.0"
   timeout_milliseconds   = 29000
 
-  # The ALB presents a self-signed cert on an internal hop; skip verification.
-  tls_config {
-    server_name_to_verify = "${local.prefix}-alb.internal"
-  }
+  # No tls_config.
+  #
+  # `server_name_to_verify` does the opposite of what the name suggests here: it
+  # makes API Gateway VALIDATE the ALB's certificate against that hostname. The
+  # ALB presents a self-signed cert (see above), so validation fails and every
+  # request returns 500 with no access-log entry. Omitting the block leaves the
+  # hop encrypted but unvalidated -- acceptable because it never leaves the VPC
+  # and the ALB's SG accepts the VPC Link SG only.
 }
 
 resource "aws_apigatewayv2_route" "proxy" {

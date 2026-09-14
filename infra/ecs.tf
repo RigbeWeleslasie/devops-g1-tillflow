@@ -341,11 +341,13 @@ resource "aws_ecs_task_definition" "service" {
         startPeriod = 10
       }
 
-      # The app should not start shipping telemetry before the collector is up.
-      dependsOn = [{
-        containerName = "adot"
-        condition     = "START"
-      }]
+      # No `dependsOn` on the sidecar.
+      #
+      # Tempting, so that telemetry is never dropped at startup -- but the
+      # collector is `essential = false`, and ECS stops a task whose dependency
+      # target has exited. That couples application availability to the
+      # observability sidecar: exactly backwards. The OTLP exporter buffers and
+      # retries, so a few early spans are the worst case if the app wins the race.
     },
 
     # --- ADOT collector sidecar -------------------------------------------

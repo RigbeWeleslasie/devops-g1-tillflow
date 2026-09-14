@@ -20,8 +20,22 @@ set -euo pipefail
 
 PREFIX="${NAME_PREFIX:-devops-g1}"
 REGION="${AWS_REGION:-us-east-1}"
-EXPECTED_ACCOUNT="${EXPECTED_ACCOUNT:-240462142849}"
 MODE="${1:-audit}"
+
+# Single source of truth for the capstone account: the `aws_account_id` default
+# in infra/variables.tf, which is also what the provider pins via
+# allowed_account_ids. Overridable with EXPECTED_ACCOUNT for a fork or a rotation.
+_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_tf_vars="$_script_dir/../variables.tf"
+EXPECTED_ACCOUNT="${EXPECTED_ACCOUNT:-$(
+  awk '/variable "aws_account_id"/,/^}/' "$_tf_vars" 2>/dev/null |
+    sed -n 's/.*default[[:space:]]*=[[:space:]]*"\([0-9]\{12\}\)".*/\1/p' | head -1
+)}"
+
+if [[ ! "$EXPECTED_ACCOUNT" =~ ^[0-9]{12}$ ]]; then
+  printf '\033[31m%s\033[0m\n' "Could not read aws_account_id from $_tf_vars; set EXPECTED_ACCOUNT."
+  exit 2
+fi
 
 REQUIRED_TAGS=(group owner environment service managed-by capstone)
 
@@ -74,30 +88,33 @@ if [[ "$MODE" == "--cleanup" ]]; then
   exit 1
 fi
 
-while IFS= read -r arn; do
-  checked=$((checked + 1))
-  tags_json="$(jq --arg a "$arn" \
-    '.ResourceTagMappingList[] | select(.ResourceARN==$a) | .Tags | from_entries? // (map({(.Key):.Value}) | add)' \
-    <<<"$resources_json")"
+# One jq pass over the whole list, emitting "<arn>\t<missing tags>" per offender.
+# The obvious shape -- loop over ARNs and re-query the JSON for each -- rescans
+# the full list once per resource and spawns a jq per tag, which is O(n^2) and
+# visibly slow by the time the stack is a few hundred resources.
+while IFS=$'\t' read -r arn missing_list; do
+  [[ -z "$arn" ]] && continue
+  red "FAIL  $arn"
+  printf '        missing/wrong: %s\n' "$missing_list"
+  violations=$((violations + 1))
+done < <(
+  jq -r --argjson required "$(printf '%s\n' "${REQUIRED_TAGS[@]}" | jq -R . | jq -s .)" '
+    .ResourceTagMappingList[]
+    | . as $r
+    | ($r.Tags | map({(.Key): .Value}) | add // {}) as $tags
+    | [
+        ($required[] | select($tags[.] == null)),
+        (if $tags["managed-by"] != null and $tags["managed-by"] != "terraform"
+         then "managed-by=terraform (got \($tags["managed-by"]))" else empty end),
+        (if $tags["capstone"] != null and $tags["capstone"] != "tillflow"
+         then "capstone=tillflow (got \($tags["capstone"]))" else empty end)
+      ] as $missing
+    | select($missing | length > 0)
+    | "\($r.ResourceARN)\t\($missing | join(" "))"
+  ' <<<"$resources_json"
+)
 
-  missing=()
-  for t in "${REQUIRED_TAGS[@]}"; do
-    v="$(jq -r --arg k "$t" '.[$k] // empty' <<<"$tags_json")"
-    [[ -z "$v" ]] && missing+=("$t")
-  done
-
-  # Value checks for the two tags with fixed values.
-  managed_by="$(jq -r '."managed-by" // empty' <<<"$tags_json")"
-  capstone="$(jq -r '.capstone // empty' <<<"$tags_json")"
-  [[ -n "$managed_by" && "$managed_by" != "terraform" ]] && missing+=("managed-by=terraform (got '$managed_by')")
-  [[ -n "$capstone"   && "$capstone"   != "tillflow"  ]] && missing+=("capstone=tillflow (got '$capstone')")
-
-  if ((${#missing[@]})); then
-    red "FAIL  $arn"
-    printf '        missing/wrong: %s\n' "${missing[*]}"
-    violations=$((violations + 1))
-  fi
-done < <(jq -r '.ResourceTagMappingList[].ResourceARN' <<<"$resources_json")
+checked="$count"
 
 if ((violations == 0)); then
   green "PASS  $checked resource(s), all six required tags present."
@@ -119,11 +136,9 @@ echo
 echo "== Naming audit =="
 
 name_violations=0
-while IFS= read -r arn; do
-  tags_json="$(jq --arg a "$arn" \
-    '.ResourceTagMappingList[] | select(.ResourceARN==$a) | .Tags | from_entries? // (map({(.Key):.Value}) | add)' \
-    <<<"$resources_json")"
-  name_tag="$(jq -r '.Name // empty' <<<"$tags_json")"
+# Emit "<arn>\t<Name tag>" once, rather than re-querying the list per ARN.
+while IFS=$'\t' read -r arn name_tag; do
+  [[ -z "$arn" ]] && continue
 
   case "$arn" in
     # Identified by generated id -> the Name tag is the name.
@@ -153,17 +168,36 @@ while IFS= read -r arn; do
         name_violations=$((name_violations + 1))
       } ;;
   esac
-done < <(jq -r '.ResourceTagMappingList[].ResourceARN' <<<"$resources_json")
+done < <(
+  jq -r '
+    .ResourceTagMappingList[]
+    | "\(.ResourceARN)\t\((.Tags | map({(.Key): .Value}) | add // {}).Name // "")"
+  ' <<<"$resources_json"
+)
 
 # KMS aliases carry the prefix that the key ARN cannot.
-while IFS= read -r alias_name; do
-  [[ "$alias_name" != "alias/${PREFIX}"* ]] && {
-    red "FAIL  KMS alias not prefixed: $alias_name"
+#
+# List the aliases for OUR keys (customer-managed keys tagged into this stack),
+# not aliases already matching the prefix -- filtering on the prefix first would
+# make the check vacuous: it could only ever see names that already pass.
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  alias_name="${line%%$'\t'*}"
+
+  # AWS-managed aliases (alias/aws/...) are not ours to name.
+  [[ "$alias_name" == alias/aws/* ]] && continue
+
+  if [[ "$alias_name" != "alias/${PREFIX}"* ]]; then
+    red "FAIL  KMS alias on a devops-g1 key is not prefixed: $alias_name"
     name_violations=$((name_violations + 1))
-  }
-done < <(aws kms list-aliases --region "$REGION" \
-           --query "Aliases[?starts_with(AliasName, 'alias/${PREFIX}')].AliasName" \
-           --output text | tr '\t' '\n' | grep -v '^$' || true)
+  fi
+done < <(
+  for key_arn in $(jq -r '.ResourceTagMappingList[].ResourceARN | select(test(":kms:"))' <<<"$resources_json"); do
+    key_id="${key_arn##*/}"
+    aws kms list-aliases --region "$REGION" --key-id "$key_id" \
+      --query 'Aliases[].AliasName' --output text 2>/dev/null | tr '\t' '\n'
+  done
+)
 
 if ((name_violations == 0)); then
   green "PASS  all $checked resource name(s) carry the '$PREFIX' prefix."

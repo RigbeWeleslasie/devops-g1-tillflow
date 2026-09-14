@@ -198,6 +198,34 @@ data "aws_iam_policy_document" "tfstate" {
       values   = ["false"]
     }
   }
+
+  # ADR 0004 requires this bucket's own CMK, not merely "some KMS key". Without
+  # this an upload naming any other key in the account would satisfy the rule
+  # above. Same Null guard: a request that names no key takes the bucket default.
+  statement {
+    sid    = "DenyWrongKmsKey"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.tfstate.arn}/*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values   = [aws_kms_key.state.arn]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values   = ["false"]
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -248,11 +276,17 @@ output "state_kms_key_arn" {
 
 output "backend_config" {
   description = "Paste into ../backend.tf (or use -backend-config)."
-  value       = <<-EOT
+
+  # kms_key_id is NOT optional here. With `encrypt = true` alone the S3 backend
+  # sends `x-amz-server-side-encryption: AES256`, which DenyWrongEncryptionHeader
+  # (above) rejects -- the incident in docs/scar-log.md. Emitting the alias keeps
+  # a re-bootstrap from walking into it again.
+  value = <<-EOT
     bucket         = "${aws_s3_bucket.tfstate.id}"
     key            = "tillflow/main/terraform.tfstate"
     region         = "${var.aws_region}"
     dynamodb_table = "${aws_dynamodb_table.tflock.name}"
     encrypt        = true
+    kms_key_id     = "${aws_kms_alias.state.name}"
   EOT
 }

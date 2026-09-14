@@ -216,6 +216,16 @@ data "aws_iam_policy_document" "task_exec_extra" {
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${local.prefix}/${each.key}/*"]
   }
 
+  # The ADOT sidecar's config is delivered as an SSM parameter (ecs.tf), and the
+  # ECS agent -- not the task -- fetches it at container start. Without this the
+  # task cannot be placed at all: ResourceInitializationError, no containers run.
+  statement {
+    sid       = "ReadAdotConfig"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameters"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${local.prefix}/adot/*"]
+  }
+
   statement {
     sid       = "DecryptSecrets"
     effect    = "Allow"

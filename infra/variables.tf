@@ -55,9 +55,16 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.20.0.0/16"
 
+  # `can(cidrsubnet(...))` alone is too weak: a /28 splits into /32s happily and
+  # passes, then network.tf's subnet math fails mid-apply. Check the prefix
+  # length directly -- the 4-bit split plus an offset of 8 needs /16 or larger.
   validation {
-    condition     = can(cidrsubnet(var.vpc_cidr, 4, 0))
-    error_message = "vpc_cidr must be a valid IPv4 CIDR with room for /20 subnets (i.e. /16 or larger)."
+    condition = (
+      can(cidrhost(var.vpc_cidr, 0)) &&
+      can(tonumber(split("/", var.vpc_cidr)[1])) &&
+      tonumber(split("/", var.vpc_cidr)[1]) <= 16
+    )
+    error_message = "vpc_cidr must be a valid IPv4 CIDR of /16 or larger (e.g. 10.20.0.0/16); network.tf splits it into /20 subnets at offsets 0,1,8,9."
   }
 }
 
