@@ -252,6 +252,12 @@ resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
 # Daraja. Locking `commission` to deny Safaricom specifically is a G2 concern --
 # the architectural guarantee is that commission holds no Daraja credentials and
 # calls the Payments API instead (docs/architecture.md §3).
+#
+# Daraja is a public API at sandbox.safaricom.co.ke with no published stable IP
+# range, so an egress CIDR narrower than 0.0.0.0/0 cannot be written without
+# breaking payments. Port 443 only, and the VPC endpoints keep ECR/logs/secrets
+# traffic off this path entirely.
+# trivy:ignore:AWS-0104 accepted: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
 resource "aws_vpc_security_group_egress_rule" "service_https" {
   for_each = toset(local.services)
 
