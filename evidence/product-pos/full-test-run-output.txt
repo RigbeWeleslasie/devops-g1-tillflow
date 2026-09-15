@@ -1,0 +1,216 @@
+
+> @tillflow/shared@0.0.0 test
+> node --import tsx --test test/**/*.test.ts
+
+TAP version 13
+# Subtest: toMinorUnits rejects floats
+ok 1 - toMinorUnits rejects floats
+  ---
+  duration_ms: 0.391167
+  type: 'test'
+  ...
+# Subtest: toMinorUnits rejects negative amounts
+ok 2 - toMinorUnits rejects negative amounts
+  ---
+  duration_ms: 0.044833
+  type: 'test'
+  ...
+# Subtest: toMinorUnits accepts zero and positive integers
+ok 3 - toMinorUnits accepts zero and positive integers
+  ---
+  duration_ms: 0.040209
+  type: 'test'
+  ...
+# Subtest: commissionForSale floors — the one documented rounding rule
+ok 4 - commissionForSale floors — the one documented rounding rule
+  ---
+  duration_ms: 0.07775
+  type: 'test'
+  ...
+# Subtest: commissionForSale rejects an out-of-range basis-point rate
+ok 5 - commissionForSale rejects an out-of-range basis-point rate
+  ---
+  duration_ms: 0.043792
+  type: 'test'
+  ...
+# Subtest: lineItemTotal is exact integer multiplication
+ok 6 - lineItemTotal is exact integer multiplication
+  ---
+  duration_ms: 0.031458
+  type: 'test'
+  ...
+# Subtest: lineItemTotal rejects a zero or fractional quantity
+ok 7 - lineItemTotal rejects a zero or fractional quantity
+  ---
+  duration_ms: 0.07325
+  type: 'test'
+  ...
+# Subtest: sumMinor sums an array of minor-unit values
+ok 8 - sumMinor sums an array of minor-unit values
+  ---
+  duration_ms: 0.035167
+  type: 'test'
+  ...
+# Subtest: formatMinor is display-only formatting, not a math primitive
+ok 9 - formatMinor is display-only formatting, not a math primitive
+  ---
+  duration_ms: 0.169125
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 60.147834
+
+> @tillflow/pos@0.0.0 test
+> node --import tsx --test 'test/**/*.test.ts'
+
+TAP version 13
+# Subtest: service layer: duplicate POST /sales body returns the first response, creates no second row
+ok 1 - service layer: duplicate POST /sales body returns the first response, creates no second row
+  ---
+  duration_ms: 54.82425
+  type: 'test'
+  ...
+# Subtest: service layer: same key, different body -> IdempotencyConflictError (maps to 409)
+ok 2 - service layer: same key, different body -> IdempotencyConflictError (maps to 409)
+  ---
+  duration_ms: 20.395083
+  type: 'test'
+  ...
+# Subtest: HTTP layer: POST /sales requires Idempotency-Key
+ok 3 - HTTP layer: POST /sales requires Idempotency-Key
+  ---
+  duration_ms: 47.367875
+  type: 'test'
+  ...
+# Subtest: HTTP layer: duplicate POST /sales (same key, same body) returns identical 201s and one row
+ok 4 - HTTP layer: duplicate POST /sales (same key, same body) returns identical 201s and one row
+  ---
+  duration_ms: 16.351417
+  type: 'test'
+  ...
+# Subtest: HTTP layer: same Idempotency-Key, different body -> 409
+ok 5 - HTTP layer: same Idempotency-Key, different body -> 409
+  ---
+  duration_ms: 12.430209
+  type: 'test'
+  ...
+# Subtest: service layer: getSale scoped to the wrong tenant returns null, not the row
+ok 6 - service layer: getSale scoped to the wrong tenant returns null, not the row
+  ---
+  duration_ms: 58.618708
+  type: 'test'
+  ...
+# Subtest: HTTP layer: cross-tenant GET /sales/:id returns 404, identical to a nonexistent id
+ok 7 - HTTP layer: cross-tenant GET /sales/:id returns 404, identical to a nonexistent id
+  ---
+  duration_ms: 59.44875
+  type: 'test'
+  ...
+# Subtest: HTTP layer: cross-tenant GET /tenants/:id is also 404 (owner-route IDOR, not just sales)
+ok 8 - HTTP layer: cross-tenant GET /tenants/:id is also 404 (owner-route IDOR, not just sales)
+  ---
+  duration_ms: 12.483167
+  type: 'test'
+  ...
+# Subtest: e2e: sale is created UNPAID, pay initiates a charge, sale.paid moves it to PAID
+ok 9 - e2e: sale is created UNPAID, pay initiates a charge, sale.paid moves it to PAID
+  ---
+  duration_ms: 95.282167
+  type: 'test'
+  ...
+# Subtest: e2e: pay refuses a sale that is already PAID
+ok 10 - e2e: pay refuses a sale that is already PAID
+  ---
+  duration_ms: 21.231291
+  type: 'test'
+  ...
+# Subtest: e2e: a timed-out charge attempt leaves the sale UNPAID with no chargeId, never FAILED
+ok 11 - e2e: a timed-out charge attempt leaves the sale UNPAID with no chargeId, never FAILED
+  ---
+  duration_ms: 16.3575
+  type: 'test'
+  ...
+# Subtest: redelivery of the SAME message id is a no-op
+ok 12 - redelivery of the SAME message id is a no-op
+  ---
+  duration_ms: 65.209917
+  type: 'test'
+  ...
+# Subtest: a DIFFERENT event for the same sale (duplicate publish) is also a no-op
+ok 13 - a DIFFERENT event for the same sale (duplicate publish) is also a no-op
+  ---
+  duration_ms: 22.015625
+  type: 'test'
+  ...
+# Subtest: reordered delivery across two sales applies each exactly once, independently
+ok 14 - reordered delivery across two sales applies each exactly once, independently
+  ---
+  duration_ms: 30.662291
+  type: 'test'
+  ...
+# Subtest: an unparseable/malformed message is left unacked, not silently dropped
+ok 15 - an unparseable/malformed message is left unacked, not silently dropped
+  ---
+  duration_ms: 2.046666
+  type: 'test'
+  ...
+# Subtest: migrations load into pg-mem and a basic insert/select round-trips
+ok 16 - migrations load into pg-mem and a basic insert/select round-trips
+  ---
+  duration_ms: 40.5945
+  type: 'test'
+  ...
+1..16
+# tests 16
+# suites 0
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 435.9405
+
+> @tillflow/web@0.0.0 test
+> node --import tsx --test 'test/**/*.test.ts'
+
+TAP version 13
+# Subtest: GET / redirects to /login when there is no session cookie
+ok 1 - GET / redirects to /login when there is no session cookie
+  ---
+  duration_ms: 40.045125
+  type: 'test'
+  ...
+# Subtest: tenant bootstrap -> owner dashboard end to end through the real shell routes
+ok 2 - tenant bootstrap -> owner dashboard end to end through the real shell routes
+  ---
+  duration_ms: 20.774958
+  type: 'test'
+  ...
+# Subtest: sale creation -> pay flow renders the sale status page
+ok 3 - sale creation -> pay flow renders the sale status page
+  ---
+  duration_ms: 13.006375
+  type: 'test'
+  ...
+# Subtest: unauthenticated access to /owner redirects to /login rather than leaking data
+ok 4 - unauthenticated access to /owner redirects to /login rather than leaking data
+  ---
+  duration_ms: 2.928
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 189.093958

@@ -18,6 +18,54 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — G2 Track A build: three real bugs caught by actually running the tests
+- **Area:** services/pos, services/web
+- **What happened:** Building POS + the web shell for G2, three genuine bugs surfaced —
+  all caught because every test was actually executed (`npm test`, `npx tsx scripts/demo.ts`)
+  rather than written and assumed correct:
+  1. `createSale` inserted `sale_items` rows referencing `sale_id` **before** the `sales`
+     row with that id existed. pg-mem correctly rejected it with a foreign-key violation —
+     real Postgres would have rejected it identically; this was never a pg-mem quirk.
+  2. A test asserting I1 held under a genuine concurrent race (`Promise.all` of two
+     identical `POST /sales`) failed intermittently. Root cause turned out to be a
+     limitation of the test harness, not the code: pg-mem does not implement true
+     cross-transaction snapshot isolation/locking between concurrently-open connections,
+     so two overlapping `BEGIN`-`COMMIT` blocks can both pass a pre-insert uniqueness
+     check that real Postgres would serialize via row-level locking on the `UNIQUE`
+     constraint. Verified pg-mem *does* enforce the same composite `PRIMARY KEY`
+     correctly for ordinary sequential inserts, isolating the gap to concurrency
+     specifically, not constraint enforcement in general.
+  3. `services/web`'s `PosClient` sent `content-type: application/json` on every request,
+     including bodyless ones like `paySale()`. Fastify's default JSON body parser rejects
+     a request that declares `application/json` with an empty body (400) — this broke the
+     web shell's `/sell/:id/pay` route, and would have broken the same call against the
+     *real* POS service in production, not just the test fake.
+- **Impact:** Caught pre-merge via `npm test`; zero runtime impact. Bug 2's test also hung
+  the whole `node --test` process for its full timeout the first time, because the failed
+  assertion skipped the `app.close()`/`fakePos.close()` cleanup lines below it, leaving an
+  open TCP listener that kept the process alive — a separate, real test-hygiene bug on top
+  of the flaky assertion itself.
+- **Root cause:** (1) wrong statement order, plain and simple. (2) a mismatch between what
+  the test claimed to prove (real Postgres locking semantics) and what the in-memory test
+  double actually models — the code being tested is correct; the test wasn't a valid way
+  to check it. (3) copying a "just always set JSON content-type" habit from a client that
+  always has a body onto one endpoint that doesn't.
+- **Fix:** Reordered the sale/sale_items inserts. Removed the invalid concurrency test,
+  replacing it with an explicit comment documenting the pg-mem limitation and what would
+  actually prove the race-safety claim (a real Postgres connection — a G3/G4 candidate,
+  not something honestly available here). Made `PosClient`'s content-type conditional on
+  an actual body being present. Rewrote `services/web/test/web.test.ts` to use
+  `t.after()` for cleanup instead of end-of-function `await close()` calls, so a future
+  assertion failure reports cleanly instead of hanging the test process.
+- **Prevention:** Keep running things, not just writing them — none of these three would
+  have been caught by review alone. For (2) specifically: when a test's failure mode is
+  "sometimes passes, sometimes doesn't" against an in-memory test double, the default
+  hypothesis should be "the double doesn't model this," not "the code is flaky" — check
+  the double's own stated limitations before assuming the code under test is wrong.
+- **Owner:** Rigbe
+
+---
+
 ### 2026-09-14 — PR #4 review: the review-fixes PR had its own regressions
 - **Area:** infra (S3 log delivery, bootstrap bucket policy, ci-plan IAM)
 - **What happened:** The follow-up PR fixing PR #3's five findings introduced two things

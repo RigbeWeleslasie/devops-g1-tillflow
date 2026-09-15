@@ -1,0 +1,25 @@
+{
+  "name": "@tillflow/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Web shell — attendant and owner UI, proxies to POS and Payments. No database of its own. DRI: Rigbe (Product + POS).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "start": "node dist/server.js",
+    "dev": "node --import tsx --watch src/server.ts",
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@tillflow/shared": "*",
+    "fastify": "5.12.4",
+    "@fastify/cookie": "11.1.2",
+    "@fastify/sensible": "6.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3",
+    "tsx": "4.23.13"
+  }
+}

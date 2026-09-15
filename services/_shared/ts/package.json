@@ -1,0 +1,35 @@
+{
+  "name": "@tillflow/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared TypeScript: money helpers, cross-service event contracts, OTel bootstrap, health-route plugin. DRI: Meron (Platform + delivery); money/events content co-owned with Rigbe/Nebyat per docs/ownership.md.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./money": "./dist/money.js",
+    "./events": "./dist/events.js",
+    "./otel": "./dist/otel.js",
+    "./health": "./dist/health.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "node --import tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/sdk-node": "0.222.0",
+    "@opentelemetry/auto-instrumentations-node": "0.80.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "0.222.0"
+  },
+  "devDependencies": {
+    "fastify": "5.12.4",
+    "typescript": "5.9.3",
+    "tsx": "4.23.13"
+  },
+  "peerDependencies": {
+    "fastify": "5.x"
+  }
+}

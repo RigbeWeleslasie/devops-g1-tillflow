@@ -1,0 +1,35 @@
+{
+  "name": "@tillflow/pos",
+  "version": "0.0.0",
+  "private": true,
+  "description": "POS API — tenant setup, sale state machine, idempotent sale creation. DRI: Rigbe (Product + POS).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "start": "node dist/server.js",
+    "dev": "node --import tsx --watch src/server.ts",
+    "migrate": "node --import tsx scripts/migrate.ts",
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@tillflow/shared": "*",
+    "fastify": "5.12.4",
+    "@fastify/jwt": "10.2.2",
+    "@fastify/sensible": "6.0.5",
+    "fastify-plugin": "6.0.0",
+    "pg": "8.23.0",
+    "pino": "10.3.1",
+    "@aws-sdk/client-sqs": "3.1132.0"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-secrets-manager": "3.1132.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/pg": "8.23.1",
+    "typescript": "5.9.3",
+    "tsx": "4.23.13",
+    "pg-mem": "3.0.14"
+  }
+}
