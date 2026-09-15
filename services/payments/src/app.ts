@@ -12,16 +12,27 @@ import type { Db } from './db.js';
 import serviceAuthPlugin from './plugins/serviceAuth.js';
 import chargesRoutes from './routes/charges.js';
 import callbacksRoutes from './routes/callbacks.js';
+import adminRoutes from './routes/admin.js';
 
 export interface BuildAppOptions {
   db: Db;
   adapter: MpesaAdapter;
   serviceToken: string;
   callbackBaseUrl: string;
+  reconcileAfterMs?: number;
+  reconcileMaxAttempts?: number;
+  /**
+   * The clock, injected like db and adapter. Every timestamp this service
+   * writes and every window it evaluates goes through here, so a test can
+   * drive "two minutes later" deterministically instead of sleeping — and so
+   * created_at and the reconcile cutoff can never come from different clocks.
+   */
+  now?: () => Date;
   logger?: boolean;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
+  const now = opts.now ?? (() => new Date());
   const app = Fastify({
     logger:
       opts.logger === false
@@ -56,8 +67,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     db: opts.db,
     adapter: opts.adapter,
     callbackBaseUrl: opts.callbackBaseUrl,
+    now,
   });
-  await app.register(callbacksRoutes, { db: opts.db });
+  await app.register(callbacksRoutes, { db: opts.db, now });
+  await app.register(adminRoutes, {
+    db: opts.db,
+    adapter: opts.adapter,
+    reconcileAfterMs: opts.reconcileAfterMs ?? 2 * 60_000,
+    reconcileMaxAttempts: opts.reconcileMaxAttempts ?? 12,
+    now,
+  });
 
   return app;
 }

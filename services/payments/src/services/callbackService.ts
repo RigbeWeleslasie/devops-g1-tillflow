@@ -4,32 +4,31 @@
  *
  * Everything for one callback happens in ONE transaction, in this order:
  *
- *   1. Record the callback in callback_events, keyed on
+ *   1. Record it in callback_events, keyed on
  *      (kind, reference, result_code, checksum). An identical redelivery
- *      hits the unique key and bumps duplicate_count instead. This happens
- *      FIRST so a duplicate never reaches the transition logic at all —
- *      "second span, zero state writes".
- *   2. Match the reference to a charge WE issued. Unknown -> stored,
- *      matched=false, nothing applied. (threat-model.md A2)
+ *      hits the unique key and bumps duplicate_count instead. This is FIRST
+ *      so a duplicate never reaches the transition logic at all — "second
+ *      span, zero state writes".
+ *   2. Match the reference to a charge we issued. If the reference is
+ *      unknown, try to ADOPT it for a charge whose push timed out (see
+ *      findAdoptableCharge). Still no match -> stored, matched=false,
+ *      nothing applied (threat-model.md A2).
  *   3. Cross-check the callback's amount against ours. Mismatch -> the
- *      charge is put on hold (hold_reason), nothing applied. (A1)
- *   4. Guarded transition: UPDATE ... WHERE status = 'PENDING'. Zero rows
- *      means someone (an earlier callback, the reconciler) already resolved
- *      it. First wins; the rest are recorded, applied=false.
- *   5. If the transition was to PAID, write the sale.paid outbox row — the
- *      one ledger effect. UNIQUE(event_type, aggregate_id) is the DB's own
- *      guarantee there is never a second one.
+ *      charge goes on hold, nothing applied (A1).
+ *   4. Guarded transition via applyChargeResolution — the same code path
+ *      the reconciler uses, so callback and query can never disagree.
+ *   5. On PAID, the sale.paid outbox row is written inside that same
+ *      transaction.
  *
- * Commit, or roll all of it back. There is no state where a charge is PAID
- * and the event was never recorded, or where the event exists twice.
+ * Commit, or roll all of it back.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { trace } from '@opentelemetry/api';
 import { metadataItem, STK_RESULT, type StkCallbackBody } from '@tillflow/mpesa';
-import type { SalePaidEvent } from '@tillflow/shared/events';
 import type { Db, Tx } from '../db.js';
 import { withTransaction } from '../db.js';
 import type { ChargeRow } from '../types.js';
+import { applyChargeResolution } from './resolution.js';
 
 export interface CallbackOutcome {
   kind: 'stk' | 'b2c';
@@ -39,6 +38,8 @@ export interface CallbackOutcome {
   recorded: 'new' | 'duplicate';
   duplicateCount: number;
   matched: boolean;
+  /** True when this callback was matched by re-association after a timed-out push. */
+  adopted: boolean;
   applied: boolean;
   transition: 'PENDING->PAID' | 'PENDING->FAILED' | null;
   chargeId: string | null;
@@ -84,11 +85,47 @@ export function callbackChecksum(body: unknown): string {
 /** Daraja's TransactionDate is yyyyMMddHHmmss in EAT (UTC+3). */
 export function parseDarajaDate(v: string | number | undefined): Date | null {
   if (v === undefined) return null;
-  const s = String(v);
-  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(s);
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(String(v));
   if (!m) return null;
   const [, y, mo, d, h, mi, se] = m;
   return new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h) - 3, Number(mi), Number(se)));
+}
+
+/** How long after creation a timed-out charge may still adopt a late callback. */
+export const ADOPTION_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Re-association for the uncertain-payment case.
+ *
+ * When an STK push times out we never receive the CheckoutRequestID, so a
+ * callback that later arrives for it matches nothing — and the customer may
+ * well have paid. Daraja offers no way to query by our own reference, so the
+ * only handle we have is the request itself: same MSISDN, same amount, still
+ * PENDING with no id of its own, created recently.
+ *
+ * Adoption is deliberately conservative. It requires EXACTLY ONE candidate:
+ * if two charges for the same phone and amount are in flight we cannot tell
+ * which one the money belongs to, so we adopt neither and leave both for a
+ * human. Guessing here would credit the wrong sale.
+ */
+export async function findAdoptableCharge(
+  tx: Tx,
+  opts: { amountMinor: number; msisdn: string; now: Date },
+): Promise<ChargeRow | 'none' | 'ambiguous'> {
+  const since = new Date(opts.now.getTime() - ADOPTION_WINDOW_MS).toISOString();
+  const res = await tx.query<ChargeRow>(
+    `SELECT * FROM charges
+     WHERE status = 'PENDING'
+       AND checkout_request_id IS NULL
+       AND hold_reason IS NULL
+       AND amount_minor = $1
+       AND customer_msisdn = $2
+       AND created_at >= $3`,
+    [opts.amountMinor, opts.msisdn, since],
+  );
+  if (res.rows.length === 0) return 'none';
+  if (res.rows.length > 1) return 'ambiguous';
+  return res.rows[0]!;
 }
 
 export interface ApplyOptions {
@@ -124,6 +161,7 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
       reference,
       resultCode,
       duplicateCount,
+      adopted: false,
       chargeId: null as string | null,
       transition: null as CallbackOutcome['transition'],
     };
@@ -133,15 +171,61 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
       return { ...base, recorded: 'duplicate', matched: true, applied: false, reason: 'duplicate delivery' };
     }
 
-    // 2. Match to a charge we issued.
-    const chargeRes = await tx.query<ChargeRow>('SELECT * FROM charges WHERE checkout_request_id = $1', [reference]);
-    const charge = chargeRes.rows[0];
+    const nowDate = now();
+    const reportedKes = Number(metadataItem(body, 'Amount'));
+    const reportedMinor = Number.isFinite(reportedKes) ? Math.round(reportedKes * 100) : NaN;
+
+    // 2. Match by CheckoutRequestID; failing that, try adoption.
+    let charge: ChargeRow | undefined;
+    let adopted = false;
+    const byRef = await tx.query<ChargeRow>('SELECT * FROM charges WHERE checkout_request_id = $1', [reference]);
+    charge = byRef.rows[0];
+
+    if (!charge && resultCode === STK_RESULT.SUCCESS && Number.isFinite(reportedMinor)) {
+      const phone = String(metadataItem(body, 'PhoneNumber') ?? '');
+      const candidate = await findAdoptableCharge(tx, {
+        amountMinor: reportedMinor,
+        msisdn: phone,
+        now: nowDate,
+      });
+      if (candidate === 'ambiguous') {
+        span?.setAttributes({ 'payments.callback.matched': false, 'payments.callback.adoption': 'ambiguous' });
+        return {
+          ...base,
+          recorded: 'new',
+          matched: false,
+          applied: false,
+          reason: 'more than one timed-out charge matches this phone and amount; a human must decide',
+        };
+      }
+      if (candidate !== 'none') {
+        // Claim the reference for this charge, guarded so two concurrent
+        // callbacks cannot both adopt it.
+        const claim = await tx.query<{ id: string }>(
+          `UPDATE charges SET checkout_request_id = $2, updated_at = $3
+           WHERE id = $1 AND checkout_request_id IS NULL AND status = 'PENDING'
+           RETURNING id`,
+          [candidate.id, reference, nowDate.toISOString()],
+        );
+        if (claim.rowCount === 1) {
+          charge = { ...candidate, checkout_request_id: reference };
+          adopted = true;
+        }
+      }
+    }
+
     if (!charge) {
       span?.setAttributes({ 'payments.callback.matched': false, 'payments.callback.applied': false });
       return { ...base, recorded: 'new', matched: false, applied: false, reason: 'no charge with this CheckoutRequestID' };
     }
+
     base.chargeId = charge.id;
-    span?.setAttributes({ 'payments.charge_id': charge.id, 'payments.sale_id': charge.sale_id });
+    base.adopted = adopted;
+    span?.setAttributes({
+      'payments.charge_id': charge.id,
+      'payments.sale_id': charge.sale_id,
+      'payments.callback.adopted': adopted,
+    });
 
     const finish = async (applied: boolean, extra: Partial<CallbackOutcome>): Promise<CallbackOutcome> => {
       await tx.query('UPDATE callback_events SET matched = true, applied = $2 WHERE id = $1', [row.id, applied]);
@@ -149,82 +233,45 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
       return { ...base, recorded: 'new', matched: true, applied, reason: null, ...extra };
     };
 
-    const ts = now().toISOString();
-
     if (resultCode === STK_RESULT.SUCCESS) {
       // 3. Amount cross-check. Daraja reports whole KES.
-      const reportedKes = Number(metadataItem(body, 'Amount'));
-      const reportedMinor = Number.isFinite(reportedKes) ? Math.round(reportedKes * 100) : NaN;
       if (reportedMinor !== charge.amount_minor) {
         const reason = `callback amount ${reportedMinor} != charge amount ${charge.amount_minor}`;
         await tx.query(
-          `UPDATE charges SET hold_reason = $2, updated_at = $3 WHERE id = $1 AND status = 'PENDING' AND hold_reason IS NULL`,
-          [charge.id, reason, ts],
+          `UPDATE charges SET hold_reason = $2, updated_at = $3
+           WHERE id = $1 AND status = 'PENDING' AND hold_reason IS NULL`,
+          [charge.id, reason, nowDate.toISOString()],
         );
         span?.setAttributes({ 'payments.charge.hold': true });
         return finish(false, { reason });
       }
-      if (charge.hold_reason) {
-        return finish(false, { reason: `charge on hold: ${charge.hold_reason}` });
-      }
 
-      // 4. Guarded transition to PAID.
+      // 4 + 5. Guarded transition and the one ledger effect.
       const receipt = metadataItem(body, 'MpesaReceiptNumber');
-      const paidAt = parseDarajaDate(metadataItem(body, 'TransactionDate')) ?? now();
-      const upd = await tx.query<{ id: string }>(
-        `UPDATE charges
-         SET status = 'PAID', mpesa_receipt = $2, result_code = $3, result_desc = $4, resolved_by = 'callback',
-             paid_at = $5, updated_at = $6
-         WHERE id = $1 AND status = 'PENDING'
-         RETURNING id`,
-        [charge.id, receipt === undefined ? null : String(receipt), resultCode, cb.ResultDesc, paidAt.toISOString(), ts],
+      const paidAt = parseDarajaDate(metadataItem(body, 'TransactionDate')) ?? nowDate;
+      const result = await applyChargeResolution(
+        tx,
+        charge,
+        {
+          outcome: 'paid',
+          resultCode,
+          resultDesc: cb.ResultDesc,
+          receipt: receipt === undefined ? null : String(receipt),
+          paidAt,
+          resolvedBy: 'callback',
+        },
+        nowDate,
       );
-      if (upd.rowCount === 0) {
-        return finish(false, { reason: `charge already ${charge.status}` });
-      }
-
-      // 5. The one ledger effect.
-      await writeSalePaidOutbox(tx, charge, paidAt, now());
-      return finish(true, { transition: 'PENDING->PAID' });
+      return finish(result.applied, { transition: result.transition, reason: result.reason });
     }
 
     // Any non-zero ResultCode is a definite decline from Daraja.
-    const upd = await tx.query<{ id: string }>(
-      `UPDATE charges
-       SET status = 'FAILED', result_code = $2, result_desc = $3, resolved_by = 'callback', failed_at = $4, updated_at = $4
-       WHERE id = $1 AND status = 'PENDING'
-       RETURNING id`,
-      [charge.id, resultCode, cb.ResultDesc, ts],
+    const result = await applyChargeResolution(
+      tx,
+      charge,
+      { outcome: 'failed', resultCode, resultDesc: cb.ResultDesc, resolvedBy: 'callback' },
+      nowDate,
     );
-    if (upd.rowCount === 0) {
-      return finish(false, { reason: `charge already ${charge.status}` });
-    }
-    return finish(true, { transition: 'PENDING->FAILED' });
+    return finish(result.applied, { transition: result.transition, reason: result.reason });
   });
-}
-
-/**
- * The sale.paid event, as a row. Shared by the callback path and the
- * reconciler's query path so both produce byte-identical events. Must be
- * called inside the transaction that made the charge PAID.
- */
-export async function writeSalePaidOutbox(tx: Tx, charge: ChargeRow, paidAt: Date, now: Date): Promise<string> {
-  const outboxId = randomUUID();
-  const event: SalePaidEvent = {
-    eventType: 'sale.paid',
-    eventId: outboxId,
-    occurredAt: now.toISOString(),
-    data: {
-      saleId: charge.sale_id,
-      tenantId: charge.tenant_id,
-      chargeId: charge.id,
-      amountMinor: charge.amount_minor,
-      paidAt: paidAt.toISOString(),
-    },
-  };
-  await tx.query(
-    `INSERT INTO outbox_events (id, event_type, aggregate_id, payload, created_at) VALUES ($1, 'sale.paid', $2, $3, $4)`,
-    [outboxId, charge.id, JSON.stringify(event), now.toISOString()],
-  );
-  return outboxId;
 }

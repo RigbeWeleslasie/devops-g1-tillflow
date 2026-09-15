@@ -16,11 +16,20 @@ import { createTestDb } from './testDb.js';
 export const SERVICE_TOKEN = 'test-service-token-0123456789abcdef';
 export const CALLBACK_BASE = 'http://payments.test';
 
+/**
+ * Reconcile settings the harness and the tests BOTH use. Exported so a test
+ * can never assert against a threshold the app under test isn't using — the
+ * mistake that made /admin/pending look broken when it wasn't.
+ */
+export const RECONCILE_AFTER_MS = 2 * 60_000;
+export const RECONCILE_MAX_ATTEMPTS = 3;
+
 export interface Harness {
   app: FastifyInstance;
   db: Db;
   fake: FakeAdapter;
   now: () => number;
+  nowDate: () => Date;
   advance: (ms: number) => void;
   /** inject() with the service token already set. */
   call: (opts: InjectOptions) => Promise<LightMyRequestResponse>;
@@ -48,6 +57,13 @@ export async function createHarness(opts: { startMs?: number } = {}): Promise<Ha
     adapter: fake,
     serviceToken: SERVICE_TOKEN,
     callbackBaseUrl: CALLBACK_BASE,
+    reconcileAfterMs: RECONCILE_AFTER_MS,
+    reconcileMaxAttempts: RECONCILE_MAX_ATTEMPTS,
+    // The same clock the fake adapter uses, so created_at, the reconcile
+    // cutoff and the fake's callback delays all move together under
+    // h.advance(). Without this the service stamps rows with the wall clock
+    // and no time-dependent behaviour is testable.
+    now: () => new Date(nowMs),
     logger: false,
   });
 
@@ -56,6 +72,7 @@ export async function createHarness(opts: { startMs?: number } = {}): Promise<Ha
     db,
     fake,
     now: () => nowMs,
+    nowDate: () => new Date(nowMs),
     advance: (ms) => {
       nowMs += ms;
     },

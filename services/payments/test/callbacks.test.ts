@@ -264,20 +264,38 @@ describe('callbacks we must not trust', () => {
 });
 
 describe('the uncertain-payment shape', () => {
-  test('after a timed-out push, a late callback cannot be matched (we never got the id) — stored, alerted, nothing applied', async () => {
+  // The full drill — adoption, ambiguity, and query-based resolution — lives
+  // in reconcile.test.ts. What belongs here is the callback path's own rule:
+  // a reference we never issued is never trusted on its own.
+  test('a callback for an id we never issued is not adopted when nothing plausibly matches it', async () => {
     const h = await createHarness();
-    const { chargeId } = await charge(h, { amountMinor: 10_300 }); // KES 103: timeout
-    assert.equal((await chargeRow(h, chargeId)).checkout_request_id, null);
+    const { chargeId } = await charge(h, { amountMinor: 25_000 }); // acked, so it HAS an id
 
-    // Daraja did process it; the customer paid; the callback finally arrives.
-    const [id] = h.fake.unresolvedTimeouts();
-    h.fake.resolveTimeout(id!, 'success');
-    await h.fake.deliverPending();
+    const forged: StkCallbackBody = {
+      Body: {
+        stkCallback: {
+          MerchantRequestID: 'x',
+          CheckoutRequestID: 'ws_CO_never_issued',
+          ResultCode: 0,
+          ResultDesc: 'ok',
+          CallbackMetadata: {
+            Item: [
+              // A plausible-looking success for an amount and phone that do
+              // not belong to any charge awaiting a reference.
+              { Name: 'Amount', Value: 999 },
+              { Name: 'PhoneNumber', Value: 254799999999 },
+            ],
+          },
+        },
+      },
+    };
+    const res = await h.app.inject({ method: 'POST', url: '/callbacks/stk', payload: forged });
+    assert.equal(res.statusCode, 200);
 
-    const c = await chargeRow(h, chargeId);
-    assert.equal(c.status, 'PENDING', 'honest: we cannot prove this callback is ours');
-    const ev = await events(h, id!);
+    const ev = await events(h, 'ws_CO_never_issued');
     assert.equal(ev[0]!.matched, false, 'recorded for the runbook, not applied');
+    assert.equal((await chargeRow(h, chargeId)).status, 'PENDING', 'our real charge is untouched');
+    assert.equal(await countRows(h.db, 'outbox_events'), 0);
     await h.close();
   });
 });

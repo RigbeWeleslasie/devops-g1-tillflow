@@ -22,6 +22,7 @@ export interface ChargesRoutesOptions {
   db: Db;
   adapter: MpesaAdapter;
   callbackBaseUrl: string;
+  now?: () => Date;
 }
 
 export function toChargeResponse(charge: Charge, created: boolean): ChargeResponse {
@@ -57,6 +58,7 @@ const chargesRoutes: FastifyPluginAsync<ChargesRoutesOptions> = async (app, opts
       db: opts.db,
       adapter: opts.adapter,
       callbackBaseUrl: opts.callbackBaseUrl,
+      ...(opts.now ? { now: opts.now } : {}),
     });
 
     request.log.info(

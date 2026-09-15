@@ -16,6 +16,7 @@ import { applyStkCallback, MalformedCallbackError, validateStkCallback } from '.
 
 export interface CallbacksRoutesOptions {
   db: Db;
+  now?: () => Date;
 }
 
 const DARAJA_ACK = { ResultCode: 0, ResultDesc: 'Accepted' };
@@ -33,7 +34,10 @@ const callbacksRoutes: FastifyPluginAsync<CallbacksRoutesOptions> = async (app, 
       throw err;
     }
 
-    const outcome = await applyStkCallback(body, { db: opts.db });
+    const outcome = await applyStkCallback(body, {
+      db: opts.db,
+      ...(opts.now ? { now: opts.now } : {}),
+    });
 
     request.log.info(
       {
