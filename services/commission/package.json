@@ -1,0 +1,32 @@
+{
+  "name": "@tillflow/commission",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Commission worker — daily close: computes each attendant's commission from confirmed PAID sales, writes the payout ledger, and requests B2C through the Payments API. Never calls Daraja directly. DRI: Nebyat (Payments + integrity).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "tsc --noEmit && tsc --noEmit --project tsconfig.test.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "start": "node dist/worker.js",
+    "dev": "node --import tsx --watch src/worker.ts",
+    "close": "node --import tsx src/cli.ts",
+    "test": "node --import tsx --test 'test/**/*.test.ts'",
+    "prelint": "npm run build --workspace=@tillflow/shared",
+    "pretest": "npm run build --workspace=@tillflow/shared"
+  },
+  "dependencies": {
+    "@tillflow/shared": "*",
+    "@opentelemetry/api": "1.9.1",
+    "pg": "8.23.0",
+    "pino": "10.3.1",
+    "@aws-sdk/client-sqs": "3.1132.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/pg": "8.23.1",
+    "typescript": "5.9.3",
+    "tsx": "4.23.13",
+    "pg-mem": "3.0.14"
+  }
+}
