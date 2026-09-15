@@ -246,10 +246,20 @@ export class DarajaAdapter implements MpesaAdapter {
 
     if (!res.ok) {
       const errBody = json as Partial<DarajaErrorResponse>;
-      throw new MpesaRejectedError(
-        errBody.errorCode ?? String(res.status),
-        errBody.errorMessage ?? `Daraja returned HTTP ${res.status}`,
-      );
+      const code = errBody.errorCode ?? String(res.status);
+      const message = errBody.errorMessage ?? `Daraja returned HTTP ${res.status}`;
+      // "Being processed" rides on an HTTP 500 but is a definite, expected
+      // answer — stkQuery maps it to `pending`.
+      if (code === DARAJA_ERROR.TRANSACTION_IN_PROGRESS) {
+        throw new MpesaRejectedError(code, message);
+      }
+      // Any other 5xx: Daraja is unwell, and we cannot know whether it
+      // processed the request before failing. Unknown state, never a decline.
+      if (res.status >= 500) {
+        throw new MpesaTransportError(`Daraja HTTP ${res.status}: ${message}`);
+      }
+      // 4xx: a definite non-accept. Nothing was initiated.
+      throw new MpesaRejectedError(code, message);
     }
     return json as T;
   }
