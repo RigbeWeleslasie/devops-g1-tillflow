@@ -33,6 +33,15 @@ if [[ "$SERVICE" == "commission" ]]; then
     --cluster "${CLUSTER:-$PREFIX}" --services "${PREFIX}-${SERVICE}" \
     --query 'services[0].[desiredCount,runningCount]' --output text)"
 
+  # `running == desired` alone passes at 0 == 0 -- a service scaled to zero
+  # would report SMOKE PASSED with nothing running at all. A smoke test that
+  # cannot fail on an empty service is not a gate.
+  if [[ "$desired" == "0" ]]; then
+    red "FAIL  ${SERVICE}: desiredCount=0 — nothing is running to smoke."
+    red "      Set service_desired_count[\"$SERVICE\"] in infra/variables.tf and apply."
+    exit 1
+  fi
+
   if [[ "$running" != "$desired" ]]; then
     red "FAIL  ${SERVICE}: running=$running desired=$desired"
     exit 1

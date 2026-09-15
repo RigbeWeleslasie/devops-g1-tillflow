@@ -112,16 +112,27 @@ variable "task_memory" {
 
 variable "service_images" {
   description = <<-EOT
-    Image per service. Digest-pinned by the pipeline on every deploy; the default
-    is the shared golden-path image so the platform can be proven before the
-    product services exist. Never a `latest` tag.
+    Image per service, digest-pinned by the pipeline on every deploy.
+
+    The default must be SELF-HEALTHY: ECS and the ALB probe /health and /ready,
+    and busybox serves neither, so a service defaulted to it crash-loops on a
+    bare `terraform apply` and the golden path only works after a pipeline run.
+    The shared reference image (services/_shared/docker) answers both, so
+    `terraform apply` alone brings up a healthy service -- the pipeline then
+    replaces the image with the same app built from the current commit.
+
+    Never a `latest` tag: this digest is pinned, and deploys use the digest that
+    the commit-SHA tag resolves to.
   EOT
   type        = map(string)
   default = {
-    web        = "public.ecr.aws/docker/library/busybox:1.36"
-    pos        = "public.ecr.aws/docker/library/busybox:1.36"
-    payments   = "public.ecr.aws/docker/library/busybox:1.36"
-    commission = "public.ecr.aws/docker/library/busybox:1.36"
+    # Shared golden-path image (devops-g1/pos, built from services/_shared/docker).
+    # Refresh with: aws ecr describe-images --repository-name devops-g1/pos \
+    #   --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageDigest'
+    web        = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
+    pos        = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
+    payments   = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
+    commission = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
   }
 }
 
@@ -133,16 +144,17 @@ variable "service_desired_count" {
     AZs -- one task cannot demonstrate the AZ-failure drill, and a rolling deploy
     with minimum-healthy-percent 100 needs somewhere to put the new task.
 
-    Services whose image is still the placeholder stay at 0: a task crash-looping
-    against busybox would fail the ALB health check and make every deploy look
-    broken. Raise a service to 2 in the same PR that gives it a real image.
+    Only `pos` runs at G1: it is the golden path, and the other services get
+    their own code in G2. They share the same self-healthy image, so raising
+    them is a one-line change -- kept at 0 for now purely to avoid paying for
+    six idle Fargate tasks on a shared cohort account.
   EOT
   type        = map(number)
   default = {
-    web        = 0 # placeholder image until G2
-    pos        = 2 # golden path: proven end to end
-    payments   = 0 # placeholder image until G2
-    commission = 0 # worker, no ingress; scaled up with its first real image
+    web        = 0 # own code lands in G2
+    pos        = 2 # golden path: proven end to end, one task per AZ
+    payments   = 0 # own code lands in G2
+    commission = 0 # worker, no ingress; scaled up with its first real workload
   }
 }
 

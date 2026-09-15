@@ -217,14 +217,40 @@ jobs:
             exit 1
           fi
 
-          echo "findings: $counts"
-          crit=$(jq -r '.CRITICAL // 0' <<<"$counts")
-          high=$(jq -r '.HIGH // 0' <<<"$counts")
+          echo "all findings: $counts"
 
-          # The brief: fail on fixable HIGH/CRITICAL. Accepted risk is recorded
-          # with an owner and an expiry in docs/threat-model.md, not waved through.
-          if [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then
-            echo "::error::$crit CRITICAL / $high HIGH finding(s) in the image"
+          # The brief says fail on FIXABLE HIGH/CRITICAL, and the PR lane already
+          # does (trivy `ignore-unfixed: true`). findingSeverityCounts counts
+          # unfixable findings too, so gating on it would diverge from the PR
+          # lane and let a single unpatchable base-image CVE block every deploy
+          # forever -- with no action available that would clear it.
+          #
+          # Count only findings that name a fixed version.
+          fixable=$(jq '[
+            .imageScanFindings.enhancedFindings[]?
+            | select(.severity == "HIGH" or .severity == "CRITICAL")
+            | select(
+                (.packageVulnerabilityDetails.vulnerablePackages // [])
+                | map(.fixedInVersion // "") | any(. != "")
+              )
+          ] | length' <<<"$raw")
+
+          # Basic scanning has no enhancedFindings; fall back to its shape.
+          if [ "$fixable" = "0" ]; then
+            fixable=$(jq '[
+              .imageScanFindings.findings[]?
+              | select(.severity == "HIGH" or .severity == "CRITICAL")
+            ] | length' <<<"$raw")
+          fi
+
+          echo "fixable HIGH/CRITICAL: $fixable"
+          if [ "$fixable" -gt 0 ]; then
+            echo "::error::$fixable fixable HIGH/CRITICAL finding(s) in the image"
+            jq -r '
+              .imageScanFindings.enhancedFindings[]?
+              | select(.severity == "HIGH" or .severity == "CRITICAL")
+              | "  \(.severity)  \(.packageVulnerabilityDetails.vulnerabilityId)"
+            ' <<<"$raw" | sort -u | head -20
             exit 1
           fi
 

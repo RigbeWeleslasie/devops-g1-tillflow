@@ -137,6 +137,17 @@ resource "aws_ssm_parameter" "adot_config" {
       }
     }
 
+    # The container health check probes `/healthcheck`, which is served by this
+    # extension on :13133. Without it declared AND listed in service.extensions
+    # below, the endpoint does not exist, the probe is refused for the life of
+    # every task, and the sidecar reports UNHEALTHY forever -- which is exactly
+    # the "sidecar boot" signal the G1 gate asks to see green.
+    extensions = {
+      health_check = {
+        endpoint = "0.0.0.0:13133"
+      }
+    }
+
     processors = {
       # Required before the awsemf/awsxray exporters: enriches spans with ECS
       # metadata (task arn, cluster) so traces are attributable to a task.
@@ -168,6 +179,9 @@ resource "aws_ssm_parameter" "adot_config" {
     }
 
     service = {
+      # Declaring an extension does not start it; it must be listed here too.
+      extensions = ["health_check"]
+
       pipelines = {
         traces = {
           receivers  = ["otlp"]
@@ -257,7 +271,8 @@ resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
 # range, so an egress CIDR narrower than 0.0.0.0/0 cannot be written without
 # breaking payments. Port 443 only, and the VPC endpoints keep ECR/logs/secrets
 # traffic off this path entirely.
-# trivy:ignore:AWS-0104 accepted: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
+# Accepted risk: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0104
 resource "aws_vpc_security_group_egress_rule" "service_https" {
   for_each = toset(local.services)
 

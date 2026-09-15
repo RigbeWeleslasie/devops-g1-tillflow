@@ -95,9 +95,33 @@ aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 \
   --query 'TargetGroups[0].TargetGroupArn' --output text)" \
   --query 'TargetHealthDescriptions[].{IP:Target.Id,State:TargetHealth.State}' --output table
 
-# sidecar boot
-aws logs tail /devops-g1/pos --since 10m | grep -i "Everything is ready"
+# sidecar boot -- both containers HEALTHY, and the collector's health_check
+# extension reporting ready (not merely "the process started")
+aws ecs describe-tasks --cluster devops-g1 \
+  --tasks "$(aws ecs list-tasks --cluster devops-g1 --service-name devops-g1-pos \
+             --desired-status RUNNING --query 'taskArns[0]' --output text)" \
+  --query 'tasks[0].containers[].{Name:name,Health:healthStatus}' --output table
+aws logs tail /devops-g1/pos --since 10m | grep -iE "health_check|Everything is ready"
 ```
+
+```
++---------+--------+-----------+
+| Health  | Name   |  Status   |
++---------+--------+-----------+
+|  HEALTHY|  pos   |  RUNNING  |
+|  HEALTHY|  adot  |  RUNNING  |
++---------+--------+-----------+
+
+Health Check state change {"kind": "extension", "name": "health_check", "status": "ready"}
+Everything is ready. Begin running and processing data.
+```
+
+The sidecar's `["CMD", "/healthcheck"]` probe is exec-form because the collector
+image is distroless -- no shell. It also needs the collector's `health_check`
+extension declared **and** listed in `service.extensions`; without both, the
+endpoint does not exist and the probe fails for the life of every task. That was
+the case until 15 Sep: the task kept serving (the sidecar is `essential = false`)
+but the sidecar-boot signal the gate asks for was permanently red.
 
 `/health` is liveness (ECS) and `/ready` is readiness (ALB) — deliberately
 different: a task that is alive but draining must leave the load balancer
