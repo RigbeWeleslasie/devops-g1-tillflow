@@ -118,6 +118,29 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — Stale state lock blocked CI after a killed plan
+- **Area:** infra (Terraform remote state)
+- **What happened:** `terraform plan` in CI failed with
+  `Error acquiring the state lock ... DynamoDB: PutItem`. Nothing was running.
+- **Impact:** ~10 minutes; the infra-plan job could not start. No effect on the
+  deployed stack.
+- **Root cause:** A local `terraform plan` was killed mid-run when the SSO
+  session expired. Terraform releases its lock on exit, but a process that dies
+  without unwinding leaves the DynamoDB row behind. Every later run then
+  correctly refused to start. The lock item names its holder, which is what made
+  this diagnosable rather than mysterious:
+  `{"Operation":"OperationTypePlan","Who":"meron@Merons-MacBook-Pro.local",
+    "Created":"2026-09-15T16:29:21Z"}`
+- **Fix:** Confirmed the holder was a dead local process (not a CI runner, no
+  local terraform running, lock 134 minutes old), then
+  `terraform force-unlock <id>`.
+- **Prevention:** This is the lock working, not failing -- the alternative is two
+  applies racing on the same state. The rule is to read the lock item BEFORE
+  breaking it: `aws dynamodb scan --table-name devops-g1-tflock` shows who holds
+  it and which operation. `force-unlock` is only safe once the holder is known
+  to be dead; breaking a lock held by a live apply is how state gets corrupted.
+- **Owner:** Meron
+
 ### 2026-09-15 — OIDC assume-role denied: GitHub's immutable-identifier `sub`
 - **Area:** infra (IAM) / CI
 - **What happened:** Every GitHub Actions job using OIDC failed with
