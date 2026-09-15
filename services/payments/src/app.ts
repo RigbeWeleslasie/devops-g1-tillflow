@@ -12,6 +12,7 @@ import type { Db } from './db.js';
 import serviceAuthPlugin from './plugins/serviceAuth.js';
 import chargesRoutes from './routes/charges.js';
 import callbacksRoutes from './routes/callbacks.js';
+import payoutsRoutes from './routes/payouts.js';
 import adminRoutes from './routes/admin.js';
 
 export interface BuildAppOptions {
@@ -64,6 +65,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   await app.register(serviceAuthPlugin, { serviceToken: opts.serviceToken });
   await app.register(chargesRoutes, {
+    db: opts.db,
+    adapter: opts.adapter,
+    callbackBaseUrl: opts.callbackBaseUrl,
+    now,
+  });
+  await app.register(payoutsRoutes, {
     db: opts.db,
     adapter: opts.adapter,
     callbackBaseUrl: opts.callbackBaseUrl,
