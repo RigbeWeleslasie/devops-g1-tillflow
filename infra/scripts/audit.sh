@@ -117,9 +117,11 @@ if [[ "$MODE" == "--cleanup" ]]; then
     | $r.ResourceARN
   ' <<<"$all_json" | sort -u)"
 
-  # Another team runs a devops-g1-iac-* stack in this shared account; theirs must
-  # not be reported as our leftovers.
-  leftovers="$(grep -v -- "-iac-" <<<"$leftovers" || true)"
+  # Another team runs a devops-g1-iac stack in this shared account; theirs must
+  # not be reported as our leftovers. Match "devops-g1-iac" followed by any
+  # separator -- they use both `-iac-` (ride-api, dispatch) and `-iac.`
+  # (the devops-g1-iac.internal service-discovery namespace).
+  leftovers="$(grep -v -- "${PREFIX}-iac" <<<"$leftovers" || true)"
 
   if [[ -z "$leftovers" ]]; then
     green "PASS  nothing tagged capstone=tillflow or named ${PREFIX}-* remains — teardown is clean."
