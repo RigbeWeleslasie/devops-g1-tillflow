@@ -79,7 +79,17 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  switch (url.pathname) {
+  // The edge routes by path prefix (ALB listener rules on /pos/*, /payments/*,
+  // and API Gateway's ANY /{proxy+}) and forwards the RAW path -- neither strips
+  // it. So the app sees /pos/health, not /health. Strip our own prefix here
+  // rather than teaching every caller two spellings; an unprefixed request still
+  // works, which keeps the container's own HEALTHCHECK and local runs simple.
+  const routePath = url.pathname.replace(
+    new RegExp(`^/(?:api/)?${SERVICE}(?=/|$)`),
+    '',
+  ) || '/';
+
+  switch (routePath) {
     // Liveness: is the process functioning? Must NOT check dependencies -- a
     // database blip should not cause ECS to restart every healthy task.
     case '/health':

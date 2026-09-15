@@ -118,6 +118,67 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — OIDC assume-role denied: GitHub's immutable-identifier `sub`
+- **Area:** infra (IAM) / CI
+- **What happened:** Every GitHub Actions job using OIDC failed with
+  `Could not assume role with OIDC: Not authorized to perform
+  sts:AssumeRoleWithWebIdentity`. Three trust-policy rewrites -- adding
+  `ref:refs/heads/*`, then a `repo:<owner>/<repo>:*` wildcard -- all failed
+  identically.
+- **Impact:** `infra-plan` and `audit` could not run on any PR. No effect on the
+  deployed platform: the same deploy path works from a laptop via
+  `./infra/scripts/deploy.sh`, which is what the workflow calls.
+- **Root cause:** This GitHub org emits OIDC claims in the **immutable-identifier
+  format**. The `sub` is not the documented `repo:<owner>/<repo>:<trigger>` but:
+
+      repo:RigbeWeleslasie@198869474/devops-g1-tillflow@1362867461:pull_request
+
+  -- the numeric account and repository ids are interpolated after each name.
+  Every name-based pattern is a literal-text mismatch, so the policy could never
+  match no matter how the trigger portion was written.
+- **Fix:** Match on the ids: `repo:*@<owner_id>/*@<repo_id>:<trigger>`, for both
+  ci-plan and ci-deploy. This is *stronger* than name matching -- a repo can be
+  renamed and a freed name re-registered by someone else, but the ids never
+  change and never transfer.
+- **Prevention:** Do not infer an OIDC claim from documentation. The workflow now
+  keeps a step that prints the token's own claims (`sub`, `aud`, `repository`,
+  `ref`, `event_name`) -- claims only, never the token -- so the next mismatch is
+  one run away from being obvious instead of three guesses deep. The wrong-turn
+  signal was three structurally different policies failing with an identical
+  error: that means the input, not the policy.
+- **Owner:** Meron
+
+### 2026-09-15 — API Gateway 503: a tls_config that AWS would not let go of
+- **Area:** infra (edge: API Gateway -> VPC Link -> internal ALB)
+- **What happened:** Every request through the public edge returned 503 while ECS
+  tasks and ALB targets were healthy and the ALB's `RequestCount` sat at 0 --
+  traffic never arrived. Roughly two hours of narrowing.
+- **Impact:** The golden path could not be demonstrated end to end; the pipeline's
+  post-deploy smoke test had nothing to pass against. No customer impact (pre-G2).
+- **Root cause:** Two faults stacked, which is why each fix only half-worked.
+  1. The VPC Link security group had an egress rule but **no ingress rule at
+     all**. Declaring the SG with no inline blocks drops the default allow-all
+     egress, and only egress was added back. Symptom: a silent 9s timeout with
+     an empty `integrationError`.
+  2. The real blocker: `tls_config { server_name_to_verify }` had been set on the
+     integration while the ALB still spoke HTTPS with a self-signed certificate.
+     After the listener moved to plain HTTP, Terraform planned the removal on
+     every run -- and **AWS silently ignored it**. `UpdateIntegration` will not
+     clear `tls_config`, so the attribute stayed, API Gateway kept trying to
+     validate a certificate on a plaintext listener, and the plan never
+     converged. `terraform plan` showing a change that "applies" cleanly and
+     then reappears is the tell.
+- **Fix:** Added the VPC Link ingress rule. Then replaced the integration **and**
+  the route together (`-replace` on both) -- deleting the integration alone fails
+  with a 409 because the route references it. `tls_config` is now null and the
+  full path works: `/pos/health` 200 through API Gateway.
+- **Prevention:** `terraform plan -detailed-exitcode` is the CI drift check; an
+  attribute that will not clear shows up as a plan that never reaches exit 0
+  rather than as a mystery. When a provider reports success but the plan does not
+  converge, verify against the API (`get-integrations`) instead of trusting the
+  apply.
+- **Owner:** Meron
+
 ### 2026-09-14 — State bucket policy denied Terraform's own state writes
 - **Area:** infra (Terraform remote state)
 - **What happened:** The first `terraform apply` of the VPC created 24 of 29 resources,

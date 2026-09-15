@@ -252,6 +252,12 @@ resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
 # Daraja. Locking `commission` to deny Safaricom specifically is a G2 concern --
 # the architectural guarantee is that commission holds no Daraja credentials and
 # calls the Payments API instead (docs/architecture.md §3).
+#
+# Daraja is a public API at sandbox.safaricom.co.ke with no published stable IP
+# range, so an egress CIDR narrower than 0.0.0.0/0 cannot be written without
+# breaking payments. Port 443 only, and the VPC endpoints keep ECR/logs/secrets
+# traffic off this path entirely.
+# trivy:ignore:AWS-0104 accepted: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
 resource "aws_vpc_security_group_egress_rule" "service_https" {
   for_each = toset(local.services)
 
@@ -345,13 +351,18 @@ resource "aws_ecs_task_definition" "service" {
         startPeriod = 10
       }
 
-      # No `dependsOn` on the sidecar.
+      # Order startup without coupling liveness.
       #
-      # Tempting, so that telemetry is never dropped at startup -- but the
-      # collector is `essential = false`, and ECS stops a task whose dependency
-      # target has exited. That couples application availability to the
-      # observability sidecar: exactly backwards. The OTLP exporter buffers and
-      # retries, so a few early spans are the worst case if the app wins the race.
+      # `condition = "START"` only waits for the collector process to start; it
+      # does not tie the app's lifetime to the sidecar's. That distinction
+      # matters: a stronger condition (HEALTHY/COMPLETE) on a non-essential
+      # container is what makes ECS tear the task down when the sidecar exits.
+      # START gives the OTLP listener a head start so early spans are not
+      # dropped, while a later collector crash still leaves the app serving.
+      dependsOn = [{
+        containerName = "adot"
+        condition     = "START"
+      }]
     },
 
     # --- ADOT collector sidecar -------------------------------------------
@@ -368,6 +379,18 @@ resource "aws_ecs_task_definition" "service" {
         name      = "AOT_CONFIG_CONTENT"
         valueFrom = aws_ssm_parameter.adot_config.arn
       }]
+
+      # Exec form, not CMD-SHELL: the collector image is distroless -- no shell,
+      # no curl, no wget. `/healthcheck` is the binary the image ships for this.
+      # Without a health check there is no signal the collector actually booted,
+      # which the G1 gate asks for ("sidecar boot").
+      healthCheck = {
+        command     = ["CMD", "/healthcheck"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 10
+      }
 
       portMappings = [
         { containerPort = 4317, protocol = "tcp", name = "otlp-grpc" },
@@ -441,8 +464,16 @@ resource "aws_ecs_service" "service" {
 
   # The pipeline updates the image; Terraform must not fight it by reverting to
   # whatever image the last apply knew about.
+  # The pipeline owns the IMAGE (it registers a new task-definition revision per
+  # deploy); Terraform owns the SIZE of the fleet.
+  #
+  # `desired_count` was in this list too, which left nobody able to set it: the
+  # workflow stopped passing --desired-count, Terraform was told to ignore it,
+  # and a fresh stack sat at 0/0 -- `wait services-stable` returns instantly,
+  # smoke gets a 503 from an empty target group, and a perfectly good deploy
+  # rolls back. Scale is a declarative property, so it belongs here.
   lifecycle {
-    ignore_changes = [task_definition, desired_count]
+    ignore_changes = [task_definition]
   }
 
   tags = {

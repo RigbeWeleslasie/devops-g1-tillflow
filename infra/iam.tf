@@ -7,28 +7,18 @@
 # repository so another repo presenting a valid GitHub token still cannot assume it.
 
 data "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 0 : 1
-  url   = "https://token.actions.githubusercontent.com"
+  url = "https://token.actions.githubusercontent.com"
 }
 
-# The provider is account-wide. On a shared cohort account another group may have
-# created it already, so it is adopted when present rather than duplicated.
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 1 : 0
-
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-
-  tags = {
-    Name    = "${local.prefix}-github-oidc"
-    service = "platform"
-    owner   = "meron"
-  }
-}
-
+# Adopt only -- never create.
+#
+# The provider is account-wide and already exists on this shared cohort account
+# (another group created it). A create path would call
+# iam:CreateOpenIDConnectProvider, which the permission set denies, so the only
+# thing that branch could ever produce is a confusing failure. Removing it makes
+# the deny path unreachable rather than merely defaulted-off.
 locals {
-  github_oidc_arn = var.create_github_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : one(data.aws_iam_openid_connect_provider.github[*].arn)
+  github_oidc_arn = data.aws_iam_openid_connect_provider.github.arn
 }
 
 # ---------------------------------------------------------------------------
@@ -62,12 +52,17 @@ data "aws_iam_policy_document" "ci_deploy_assume" {
     # instead; only a push to main or the protected "prod" environment (i.e.
     # deploy.yml, which requires the environment's required reviewers) may
     # assume this role.
+    #
+    # Matched by immutable IDs, for the same reason as ci_plan below: this org
+    # emits `repo:<owner>@<owner_id>/<repo>@<repo_id>:<trigger>`, so a name-only
+    # pattern matches nothing at all. The trailing trigger is still pinned
+    # exactly -- that is the part doing the security work here.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repository}:ref:refs/heads/main",
-        "repo:${var.github_repository}:environment:prod",
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:ref:refs/heads/main",
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:environment:prod",
       ]
     }
   }
@@ -188,10 +183,28 @@ data "aws_iam_policy_document" "ci_plan_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # This repository, matched by IMMUTABLE IDs.
+    #
+    # The org has GitHub's immutable-identifier format enabled, so the `sub`
+    # claim is not `repo:<owner>/<repo>:...` but:
+    #
+    #   repo:RigbeWeleslasie@198869474/devops-g1-tillflow@1362867461:pull_request
+    #
+    # -- the numeric account and repository IDs are interpolated after each name.
+    # A name-only pattern cannot match that text, which is why every trust policy
+    # written against the documented shape failed with "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity" (see docs/scar-log.md).
+    #
+    # Matching on the IDs is stronger than matching on names: a repo can be
+    # renamed, and a freed-up name can be claimed by someone else, but these IDs
+    # never change and never transfer. The wildcards cover the name halves (which
+    # may change) and the trailing trigger.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:pull_request"]
+      values = [
+        "repo:*@${var.github_owner_id}/*@${var.github_repository_id}:*",
+      ]
     }
   }
 }

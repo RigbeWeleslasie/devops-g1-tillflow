@@ -286,12 +286,15 @@ resource "aws_security_group" "vpce" {
     cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
+  # Endpoint ENIs only ever answer callers inside the VPC; security groups are
+  # stateful, so responses need no egress rule at all. An allow-all-out rule here
+  # was copied habit, not a requirement (trivy AWS-0104).
   egress {
-    description = "Responses"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "Responses to callers inside the VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
   tags = {

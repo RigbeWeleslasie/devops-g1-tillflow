@@ -40,14 +40,36 @@ variable "github_repository" {
   }
 }
 
-variable "create_github_oidc_provider" {
+variable "github_owner_id" {
   description = <<-EOT
-    Create the account-wide GitHub OIDC provider, or adopt an existing one.
-    The cohort account is shared, so another group may already have created it;
-    it can only exist once per account.
+    Numeric GitHub account id of the repository owner. This org emits OIDC `sub`
+    claims in the immutable-identifier format
+    (`repo:<owner>@<owner_id>/<repo>@<repo_id>:<trigger>`), so the trust policies
+    match on ids rather than names -- ids never change and never transfer.
+    Read it from the token claims, or:
+      curl -s https://api.github.com/users/<owner> | jq .id
   EOT
-  type        = bool
-  default     = false
+  type        = string
+  default     = "198869474"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_owner_id))
+    error_message = "github_owner_id must be numeric."
+  }
+}
+
+variable "github_repository_id" {
+  description = <<-EOT
+    Numeric GitHub repository id. See github_owner_id.
+      curl -s https://api.github.com/repos/<owner>/<repo> | jq .id
+  EOT
+  type        = string
+  default     = "1362867461"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "github_repository_id must be numeric."
+  }
 }
 
 variable "vpc_cidr" {
@@ -105,17 +127,92 @@ variable "service_images" {
 
 variable "service_desired_count" {
   description = <<-EOT
-    Running tasks per service. Services start at 0 and are scaled up once the
-    pipeline has pushed a real image, so an apply never leaves failing tasks
-    crash-looping against a placeholder.
+    Running tasks per service; Terraform owns this, the pipeline owns the image.
+
+    Two per HTTP service, so each ALB target group has a healthy target in both
+    AZs -- one task cannot demonstrate the AZ-failure drill, and a rolling deploy
+    with minimum-healthy-percent 100 needs somewhere to put the new task.
+
+    Services whose image is still the placeholder stay at 0: a task crash-looping
+    against busybox would fail the ALB health check and make every deploy look
+    broken. Raise a service to 2 in the same PR that gives it a real image.
   EOT
   type        = map(number)
   default = {
-    web        = 0
-    pos        = 0
-    payments   = 0
-    commission = 0
+    web        = 0 # placeholder image until G2
+    pos        = 2 # golden path: proven end to end
+    payments   = 0 # placeholder image until G2
+    commission = 0 # worker, no ingress; scaled up with its first real image
   }
+}
+
+# --- data tier (ADR 0003) --------------------------------------------------
+
+variable "db_engine_version" {
+  description = "PostgreSQL major version (ADR 0003: 16.x, latest minor at apply)."
+  type        = string
+  default     = "16"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class. Burstable Graviton; revisit after k6 (G3)."
+  type        = string
+  default     = "db.t4g.small"
+}
+
+variable "db_multi_az" {
+  description = <<-EOT
+    Multi-AZ (synchronous standby). ADR 0003 requires it for the RPO~0 story and
+    the G4 AZ-failure drill. Set false only to cut cost while iterating, and say
+    so in the PR -- it changes the durability claim the SLOs rest on.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "db_performance_insights" {
+  description = <<-EOT
+    Performance Insights. Supported on db.t4g.small (verified on the applied
+    instance -- see the note in data.tf); unsupported on db.t2/t3.micro. Set
+    false if the instance class ever changes to one that refuses it.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "db_backup_retention_days" {
+  description = "Automated backup retention (ADR 0003: 7 days, RPO <= 5 min)."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.db_backup_retention_days >= 1
+    error_message = "Retention must be at least 1 day; 0 disables automated backups and breaks the RPO claim in ADR 0003."
+  }
+}
+
+variable "db_name" {
+  description = "Initial database name."
+  type        = string
+  default     = "tillflow"
+}
+
+variable "db_master_username" {
+  description = "RDS master username. Per-service least-privilege roles are created by the migration job (ADR 0003)."
+  type        = string
+  default     = "tillflow_admin"
+}
+
+variable "redis_engine_version" {
+  description = "ElastiCache Valkey engine version."
+  type        = string
+  default     = "8.0"
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache node type. Sized after k6 (G3)."
+  type        = string
+  default     = "cache.t4g.micro"
 }
 
 # --- edge ------------------------------------------------------------------

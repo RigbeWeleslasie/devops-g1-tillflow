@@ -32,6 +32,26 @@ RUN mkdir -p node_modules && if [ -f package-lock.json ]; then npm ci --omit=dev
 # ---------------------------------------------------------------------------
 FROM base AS runtime
 
+# Patch the OS packages and remove the toolchain the runtime does not use.
+#
+# The base image is rebuilt on its own cadence, so pinning a digest (which we
+# must, for reproducibility) also pins whatever CVEs it shipped with -- here an
+# openssl advisory in libcrypto3/libssl3. `apk upgrade` closes that at build time
+# without giving up the pin.
+#
+# Deleting npm/yarn/corepack removes far more: npm vendors its own copies of tar,
+# pacote, sigstore, brace-expansion, picomatch and ip-address, and every CVE in
+# those was being reported against a production image that never runs a package
+# manager. Dependencies are installed in the `deps` stage and copied in, so
+# nothing here needs npm. Smaller image, smaller attack surface, quieter scan --
+# and the ones that remain are real.
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/corepack \
+           /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
 # Build args -> runtime env. The pipeline passes the real values; the defaults
 # keep a local `docker build` working.
 ARG COMMIT_SHA=unknown

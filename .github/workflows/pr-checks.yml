@@ -1,7 +1,10 @@
 name: PR checks
 
-# G0 scaffold. Real build/test/scan steps are wired in G1 once services have code.
 # Lane owner: Meron (Platform + delivery).
+#
+# Path filters drive a per-service matrix, so a change under services/payments/
+# builds only Payments (plus anything depending on _shared). Infra changes get a
+# `terraform plan` posted back to the PR; the matching apply happens on main.
 
 on:
   pull_request:
@@ -14,6 +17,10 @@ concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.16.1"
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -24,6 +31,7 @@ jobs:
       commission: ${{ steps.filter.outputs.commission }}
       shared: ${{ steps.filter.outputs.shared }}
       infra: ${{ steps.filter.outputs.infra }}
+      services: ${{ steps.build.outputs.services }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -37,62 +45,276 @@ jobs:
             commission: [ 'services/commission/**', 'services/_shared/**' ]
             infra: 'infra/**'
 
+      # Collapse the filter booleans into a JSON array the matrix can consume,
+      # so unchanged services produce no job at all rather than a skipped one.
+      - id: build
+        run: |
+          services='[]'
+          for s in web pos payments commission; do
+            if [ "${{ steps.filter.outputs.web }}" = "true" ] && [ "$s" = "web" ]; then services=$(echo "$services" | jq -c '. + ["web"]'); fi
+            if [ "${{ steps.filter.outputs.pos }}" = "true" ] && [ "$s" = "pos" ]; then services=$(echo "$services" | jq -c '. + ["pos"]'); fi
+            if [ "${{ steps.filter.outputs.payments }}" = "true" ] && [ "$s" = "payments" ]; then services=$(echo "$services" | jq -c '. + ["payments"]'); fi
+            if [ "${{ steps.filter.outputs.commission }}" = "true" ] && [ "$s" = "commission" ]; then services=$(echo "$services" | jq -c '. + ["commission"]'); fi
+          done
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "changed services: $services"
+
+  # ---------------------------------------------------------------------------
+  # Per-service build, test, scan
+  # ---------------------------------------------------------------------------
   service-ci:
     needs: changes
-    if: ${{ needs.changes.outputs.web == 'true' || needs.changes.outputs.pos == 'true' || needs.changes.outputs.payments == 'true' || needs.changes.outputs.commission == 'true' }}
+    if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        service: [web, pos, payments, commission]
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
-      - name: Skip unchanged
-        run: |
-          changed='${{ toJSON(needs.changes.outputs) }}'
-          echo "changed=$changed"
-          # TODO(G1): if this service not in changed set -> exit 0
-      - name: Lint / typecheck
-        run: echo "TODO(G1): lint + typecheck ${{ matrix.service }}"
-      - name: Unit + integration tests (fake M-Pesa adapter)
-        run: echo "TODO(G1): tests with MPESA_ADAPTER=fake"
-      - name: Docker build (multi-stage, pinned base)
-        run: echo "TODO(G1): docker build, tag by \${{ github.sha }}"
-      - name: SBOM
-        run: echo "TODO(G1): syft -> sbom.spdx.json"
-      - name: Image scan (fail on fixable HIGH/CRITICAL)
-        run: echo "TODO(G1): trivy/grype image scan"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Lint / typecheck
+        working-directory: services/${{ matrix.service }}
+        run: |
+          if [ -f package.json ] && jq -e '.scripts.lint' package.json >/dev/null; then
+            npm ci && npm run lint
+          else
+            # No package.json yet (G1): syntax-check whatever JS exists so the
+            # gate is real rather than a green tick over nothing.
+            echo "no package.json — syntax checking JS"
+            find . ../_shared -name '*.js' -not -path '*/node_modules/*' -print0 2>/dev/null \
+              | xargs -0 -r -n1 node --check
+          fi
+
+      - name: Unit + integration tests (deterministic fake M-Pesa adapter)
+        working-directory: services/${{ matrix.service }}
+        env:
+          MPESA_ADAPTER: fake   # never the Daraja sandbox in CI (brief §Mission)
+        run: |
+          if [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null; then
+            npm test
+          else
+            echo "no tests yet for ${{ matrix.service }} — service code lands in G2"
+          fi
+
+      - name: Docker build (multi-stage, pinned base, non-root)
+        run: |
+          docker build \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
+            --build-arg SERVICE_NAME=${{ matrix.service }} \
+            -t ${{ matrix.service }}:${{ github.sha }} \
+            services/_shared/docker
+
+      - name: Verify the image runs as non-root
+        run: |
+          user=$(docker inspect ${{ matrix.service }}:${{ github.sha }} --format '{{.Config.User}}')
+          echo "image user: ${user:-<root>}"
+          [ -n "$user" ] && [ "$user" != "root" ] && [ "$user" != "0" ] || {
+            echo "::error::image must not run as root"; exit 1; }
+
+      - name: Smoke the image (health/ready/version)
+        run: |
+          docker run -d --name probe --read-only -p 18080:8080 \
+            -e SERVICE_NAME=${{ matrix.service }} \
+            -e COMMIT_SHA=${{ github.sha }} \
+            ${{ matrix.service }}:${{ github.sha }}
+          for i in $(seq 1 20); do
+            if curl -fsS localhost:18080/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS localhost:18080/health  | tee /dev/stderr | jq -e '.status=="ok"'
+          curl -fsS localhost:18080/ready   | tee /dev/stderr | jq -e '.status=="ready"'
+          curl -fsS localhost:18080/version | tee /dev/stderr | jq -e '.sha=="${{ github.sha }}"'
+          docker rm -f probe
+
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ matrix.service }}:${{ github.sha }}
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.service }}.spdx.json
+
+      - name: Image scan — fail on fixable HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.service }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true    # accepted risk needs an owner + expiry, not a red build
+          exit-code: '1'
+          format: table
+
+  # ---------------------------------------------------------------------------
+  # Repo-wide security scans
+  # ---------------------------------------------------------------------------
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: Secret scan
-        run: echo "TODO(G1): gitleaks"
-      - name: Dependency scan
-        run: echo "TODO(G1): dependency audit"
-      - name: IaC scan
-        run: echo "TODO(G1): tfsec / checkov on infra/"
 
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: IaC scan (Terraform)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+
+  # ---------------------------------------------------------------------------
+  # Terraform: fmt, validate, plan -> PR comment
+  # ---------------------------------------------------------------------------
   infra-plan:
     needs: changes
-    if: ${{ needs.changes.outputs.infra == 'true' }}
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   # OIDC
+      id-token: write        # OIDC -> devops-g1-ci-plan (read-only)
       contents: read
-      pull-requests: write
+      pull-requests: write   # to post the plan
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # Prints the OIDC token's own claims (never the token). Three trust-policy
+      # guesses failed in a row; the `sub` AWS is actually being offered is the
+      # only thing that settles which value the policy must allow.
+      - name: Show OIDC claims
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          payload=$(cut -d. -f2 <<<"$token")
+          # base64url -> base64, pad to a multiple of 4.
+          payload=$(tr '_-' '/+' <<<"$payload")
+          case $(( ${#payload} % 4 )) in 2) payload="$payload==";; 3) payload="$payload=";; esac
+          echo "$payload" | base64 -d 2>/dev/null \
+            | jq '{sub, aud, repository, repository_owner, ref, event_name, workflow_ref}'
+
       - name: Configure AWS credentials (OIDC, read-only)
-        # Assumes devops-g1-ci-plan, NOT devops-g1-ci-deploy: a pull_request run
-        # must never hold write/apply credentials (infra/iam.tf).
-        run: echo "TODO(G1): aws-actions/configure-aws-credentials -> devops-g1-ci-plan"
+        # devops-g1-ci-plan, NOT ci-deploy: a pull_request run must never hold
+        # write credentials. ci-deploy's trust policy excludes pull_request for
+        # the same reason, so this is enforced on both ends (infra/iam.tf).
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-plan-${{ github.run_id }}
+
       - name: terraform fmt -check
         run: terraform -chdir=infra fmt -check -recursive
-      - name: terraform init + validate
-        run: echo "TODO(G1): terraform -chdir=infra init && validate"
+
+      - name: terraform init
+        run: terraform -chdir=infra init -input=false
+
+      - name: terraform validate
+        run: terraform -chdir=infra validate -no-color
+
+      # `-refresh=false`, deliberately.
+      #
+      # A refresh re-reads every resource from AWS, including
+      # secretsmanager_secret_version -- which means calling GetSecretValue on
+      # the Daraja credentials, the Slack webhook and the DB passwords. The
+      # read-only PR role cannot do that, and it SHOULD NOT: granting a role that
+      # any pull request can assume the ability to read production secrets would
+      # be a far worse trade than a slightly staler plan.
+      #
+      # What is lost: drift that happened outside Terraform will not appear in
+      # the PR plan. That is acceptable here because the plan is a review aid,
+      # not the authority -- deploy.yml re-plans WITH refresh under ci-deploy on
+      # main before applying, so the applied plan is always refresh-accurate.
       - name: terraform plan
-        run: echo "TODO(G1): terraform -chdir=infra plan -no-color -> PR comment"
+        id: plan
+        run: |
+          set +e
+          terraform -chdir=infra plan -input=false -no-color -refresh=false -out=tfplan > plan.txt 2>&1
+          code=$?
+          set -e
+          tail -c 60000 plan.txt > plan-trunc.txt
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # Not `cat plan.txt`: job logs are readable by anyone with repo access,
+          # and a plan can echo sensitive computed values. The PR comment below
+          # carries the reviewable output.
+          grep -E '^(Plan:|No changes|Error)' plan.txt || true
+          exit $code
+
+      # The binary plan file is deliberately NOT uploaded.
+      #
+      # `infra/tfplan` embeds every computed value, including
+      # random_password.db_master in cleartext -- anyone with repo read access
+      # could download the artifact and read the database password. Only the
+      # text plan is published, and Terraform redacts sensitive values there.
+      #
+      # main re-plans against the same commit before applying, so plan/apply
+      # parity does not depend on shipping the binary plan between jobs.
+      - name: Upload plan (text only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: plan.txt
+          retention-days: 14
+
+      - name: Comment plan on PR
+        # Only when the plan step actually produced a file. Under always() a
+        # failing fmt/init/validate dies here with ENOENT and masks the real error.
+        if: always() && hashFiles('plan-trunc.txt') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('plan-trunc.txt', 'utf8');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### \`terraform plan\`\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${body}\n\`\`\`\n\n</details>`
+            });
+
+  # ---------------------------------------------------------------------------
+  # Naming + tag audit — the G1 gate check, run against live AWS
+  # ---------------------------------------------------------------------------
+  audit:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # The audit reconciles against `terraform state pull` to scope itself to
+      # resources THIS stack owns -- the cohort account is shared, and matching
+      # on the devops-g1 name prefix would report another team's untagged
+      # devops-g1-iac-* resources as our violations. That means the job needs
+      # Terraform and an initialised backend, not just the AWS CLI.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false   # the wrapper mangles `state pull` output
+
+      - name: Configure AWS credentials (OIDC, read-only)
+        # The audit only describes resources, so the read-only role suffices.
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-audit-${{ github.run_id }}
+
+      - name: terraform init
+        run: terraform -chdir=infra init -input=false
+
+      - name: Naming + tag audit
+        run: ./infra/scripts/audit.sh

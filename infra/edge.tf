@@ -129,6 +129,7 @@ resource "aws_lb_target_group" "service" {
 # by the SG pairing instead (ALB accepts the VPC Link SG only, and the ALB has
 # no public IP), which is the control docs/threat-model.md line 47 actually
 # names. Revisit if the capstone acquires a domain.
+# trivy:ignore:AWS-0054 accepted: internal-only hop, no public ingress; public TLS terminates at API Gateway. Owner: meron. Expiry: G5.
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
@@ -213,6 +214,26 @@ resource "aws_security_group" "vpclink" {
 
   tags = {
     Name    = "${local.prefix}-vpclink"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+# API Gateway's VPC Link ENIs need ingress on the integration port, not just
+# egress. Declaring the SG with no inline rules drops the default allow-all
+# egress, and adding only an egress rule leaves the link with zero ingress --
+# requests then hang until API Gateway times out at ~9s and returns a bare 503,
+# with ALB RequestCount stuck at 0 because nothing ever arrives.
+resource "aws_vpc_security_group_ingress_rule" "vpclink_from_vpc" {
+  security_group_id = aws_security_group.vpclink.id
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  cidr_ipv4         = aws_vpc.main.cidr_block
+  description       = "Integration traffic within the VPC"
+
+  tags = {
+    Name    = "${local.prefix}-vpclink-ingress"
     service = "platform"
     owner   = "meron"
   }
