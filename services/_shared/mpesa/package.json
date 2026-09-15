@@ -14,6 +14,7 @@
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "node --import tsx --test 'test/**/*.test.ts'",
+    "stub": "node --import tsx src/stub-server.ts",
     "prelint": "npm run build --workspace=@tillflow/shared",
     "pretest": "npm run build --workspace=@tillflow/shared"
   },

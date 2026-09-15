@@ -60,18 +60,24 @@ function harness(startMs = 1_700_000_000_000) {
 }
 
 describe('scenario selection', () => {
-  test('is keyed on the last two minor-unit digits', () => {
-    assert.equal(scenarioFor(10_000), 'success');
-    assert.equal(scenarioFor(10_001), 'cancelled');
-    assert.equal(scenarioFor(10_002), 'insufficient_funds');
-    assert.equal(scenarioFor(10_003), 'timeout');
-    assert.equal(scenarioFor(10_004), 'duplicate_callback');
-    assert.equal(scenarioFor(10_005), 'delayed_callback');
+  test('is keyed on the last two digits of the SHILLING amount (KES 101 = cancelled)', () => {
+    assert.equal(scenarioFor(10_000), 'success'); // KES 100
+    assert.equal(scenarioFor(10_100), 'cancelled'); // KES 101
+    assert.equal(scenarioFor(10_200), 'insufficient_funds'); // KES 102
+    assert.equal(scenarioFor(10_300), 'timeout'); // KES 103
+    assert.equal(scenarioFor(10_400), 'duplicate_callback'); // KES 104
+    assert.equal(scenarioFor(10_500), 'delayed_callback'); // KES 105
   });
 
-  test('cents outside the table are ordinary money, not undefined behaviour', () => {
-    assert.equal(scenarioFor(10_050), 'success');
-    assert.equal(scenarioFor(10_099), 'success');
+  test('other suffixes are ordinary money, not undefined behaviour', () => {
+    assert.equal(scenarioFor(15_000), 'success'); // KES 150
+    assert.equal(scenarioFor(19_900), 'success'); // KES 199
+    assert.equal(scenarioFor(100_300), 'timeout'); // KES 1003 — only the last two digits count
+  });
+
+  test('cents never select a scenario (Daraja cannot carry them anyway)', () => {
+    // KES 100.03 would be refused by the adapters; the selector alone just ignores the cents.
+    assert.equal(scenarioFor(10_003), 'success');
   });
 
   test('an explicit hint overrides the amount; an unknown hint is loud', () => {
@@ -105,7 +111,7 @@ describe('STK push scenarios', () => {
 
   test('cancelled: ResultCode 1032, no metadata', async () => {
     const { fake } = harness();
-    await fake.stkPush(stkReq(25_001));
+    await fake.stkPush(stkReq(10_100));
     const body = fake.peekPending()[0]!.body as StkCallbackBody;
     assert.equal(body.Body.stkCallback.ResultCode, STK_RESULT.CANCELLED_BY_USER);
     assert.equal(body.Body.stkCallback.CallbackMetadata, undefined);
@@ -113,21 +119,21 @@ describe('STK push scenarios', () => {
 
   test('insufficient funds: ResultCode 1', async () => {
     const { fake } = harness();
-    await fake.stkPush(stkReq(25_002));
+    await fake.stkPush(stkReq(10_200));
     const body = fake.peekPending()[0]!.body as StkCallbackBody;
     assert.equal(body.Body.stkCallback.ResultCode, STK_RESULT.INSUFFICIENT_FUNDS);
   });
 
   test('timeout: throws MpesaTimeoutError, queues nothing, but the attempt is recorded', async () => {
     const { fake } = harness();
-    await assert.rejects(fake.stkPush(stkReq(25_003)), MpesaTimeoutError);
+    await assert.rejects(fake.stkPush(stkReq(10_300)), MpesaTimeoutError);
     assert.equal(fake.peekPending().length, 0, 'no callback: the caller heard nothing');
     assert.equal(fake.unresolvedTimeouts().length, 1, 'but Daraja "received" it');
   });
 
   test('timeout then resolveTimeout: query flips from pending to complete and the late callback is queued', async () => {
     const { fake } = harness();
-    await assert.rejects(fake.stkPush(stkReq(25_003)), MpesaTimeoutError);
+    await assert.rejects(fake.stkPush(stkReq(10_300)), MpesaTimeoutError);
     const [id] = fake.unresolvedTimeouts();
     assert.ok(id);
 
@@ -143,7 +149,7 @@ describe('STK push scenarios', () => {
 
   test('duplicate_callback: the same successful callback is queued twice', async () => {
     const { fake } = harness();
-    const ack = await fake.stkPush(stkReq(25_004));
+    const ack = await fake.stkPush(stkReq(10_400));
     const pending = fake.peekPending();
     assert.equal(pending.length, 2);
     assert.deepEqual(pending[0]!.body, pending[1]!.body, 'byte-identical');
@@ -152,7 +158,7 @@ describe('STK push scenarios', () => {
 
   test('delayed_callback: not due until the clock passes the delay; query stays pending meanwhile', async () => {
     const { fake, received, advance } = harness();
-    const ack = await fake.stkPush(stkReq(25_005));
+    const ack = await fake.stkPush(stkReq(10_500));
 
     assert.equal(await fake.deliverPending(), 0, 'nothing due yet');
     assert.equal(received.length, 0);
@@ -168,6 +174,13 @@ describe('STK push scenarios', () => {
   test('scenarioHint on the request forces a scenario regardless of amount', async () => {
     const { fake } = harness();
     await assert.rejects(fake.stkPush(stkReq(25_000, { scenarioHint: 'timeout' })), MpesaTimeoutError);
+  });
+
+  test('a fractional-shilling amount is refused by the fake exactly as the real adapter refuses it', async () => {
+    const { fake } = harness();
+    await assert.rejects(fake.stkPush(stkReq(250)), /whole shillings/);
+    await assert.rejects(fake.b2cPayment(b2cReq(150_050)), /whole shillings/);
+    assert.equal(fake.peekPending().length, 0);
   });
 
   test('stkQuery for an unknown id is pending, not an exception', async () => {
@@ -224,7 +237,7 @@ describe('B2C scenarios', () => {
 
   test('insufficient balance: ResultCode 1, empty TransactionID', async () => {
     const { fake } = harness();
-    await fake.b2cPayment(b2cReq(150_002));
+    await fake.b2cPayment(b2cReq(150_200));
     const body = fake.peekPending()[0]!.body as B2CResultBody;
     assert.equal(body.Result.ResultCode, B2C_RESULT.INSUFFICIENT_BALANCE);
     assert.equal(body.Result.TransactionID, '');
@@ -232,13 +245,13 @@ describe('B2C scenarios', () => {
 
   test('timeout: throws, queues nothing', async () => {
     const { fake } = harness();
-    await assert.rejects(fake.b2cPayment(b2cReq(150_003)), MpesaTimeoutError);
+    await assert.rejects(fake.b2cPayment(b2cReq(150_300)), MpesaTimeoutError);
     assert.equal(fake.peekPending().length, 0);
   });
 
   test('duplicate_callback: two identical results queued', async () => {
     const { fake } = harness();
-    await fake.b2cPayment(b2cReq(150_004));
+    await fake.b2cPayment(b2cReq(150_400));
     const pending = fake.peekPending();
     assert.equal(pending.length, 2);
     assert.deepEqual(pending[0]!.body, pending[1]!.body);

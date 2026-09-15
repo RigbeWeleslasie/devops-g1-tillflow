@@ -15,20 +15,45 @@ One interface, two implementations. The Payments service programs against
 
 ## Scenario table (single source of truth for every failure drill)
 
-Selected by `amountMinor % 100`, or by an explicit `X-Fake-Scenario` header that the
-Payments service forwards as `scenarioHint`.
+Selected by the **last two digits of the shilling amount** (`KES % 100`), or by an explicit
+`X-Fake-Scenario` header that the Payments service forwards as `scenarioHint`. Shillings,
+not cents: Daraja only accepts whole-shilling amounts, so a cents-based key could never
+reach a fake Daraja over the wire. KES 103 is a timeout whether the fake is in-process or
+behind the stub-server.
 
-| Cents | Scenario | STK result | What it drives |
-| --- | --- | --- | --- |
-| `00` | `success` | callback `ResultCode 0` | happy path |
-| `01` | `cancelled` | `ResultCode 1032` | genuine business decline |
-| `02` | `insufficient_funds` | `ResultCode 1` | genuine business decline |
-| `03` | `timeout` | **no ack, no callback**; `MpesaTimeoutError` | "a timeout is not a decline" — I5, reconciler |
-| `04` | `duplicate_callback` | ack OK; the same success callback **twice** | replay / reorder — I3 |
-| `05` | `delayed_callback` | ack OK; callback lands after 61 s | Payments SLO / reconciliation window |
+| KES ends in | Example | Scenario | STK result | What it drives |
+| --- | --- | --- | --- | --- |
+| `00` | KES 100, 1 000 | `success` | callback `ResultCode 0` | happy path |
+| `01` | KES 101 | `cancelled` | `ResultCode 1032` | genuine business decline |
+| `02` | KES 102 | `insufficient_funds` | `ResultCode 1` | genuine business decline |
+| `03` | KES 103 | `timeout` | **no ack, no callback**; `MpesaTimeoutError` | "a timeout is not a decline" — I5, reconciler |
+| `04` | KES 104 | `duplicate_callback` | ack OK; the same success callback **twice** | replay / reorder — I3 |
+| `05` | KES 105 | `delayed_callback` | ack OK; callback lands after 61 s | Payments SLO / reconciliation window |
+| anything else | KES 250 | `success` | — | ordinary money |
 
 B2C mirrors the same table (`01`/`02` both mean the business balance is short — there is no
 "customer cancelled" on a payout).
+
+**Whole shillings only.** Both adapters refuse a fractional-shilling amount (`KES 2.50`)
+rather than rounding it. The fake refuses exactly what the real adapter refuses, so a test
+cannot pass with an amount prod would reject. This is a product constraint: **product prices
+must be whole shillings** (`unit_price_minor % 100 == 0`).
+
+## The stub-server is a fake Daraja
+
+`npm run stub` (or `node dist/stub-server.js`, `PORT=9090`) serves Daraja's real endpoints
+(`/oauth/v1/generate`, `/mpesa/stkpush/v1/processrequest`, `/mpesa/stkpushquery/v1/query`,
+`/mpesa/b2c/v3/paymentrequest`) in Daraja's exact wire format, backed by `FakeAdapter`.
+
+Under k6 the Payments service runs with `MPESA_ADAPTER=daraja` and `DARAJA_BASE_URL` pointed
+at the stub — so the **real `DarajaAdapter`** HTTP path (OAuth, timeouts, callback delivery
+over the network) is what gets load-tested, not an in-process shortcut. Callbacks
+auto-deliver on a timer; a `timeout` scenario holds the socket open past the client's timeout
+and then drops it, so the client experiences a real network timeout.
+
+`test/daraja.test.ts` runs `DarajaAdapter` against the stub on an ephemeral port and proves
+the two agree on the wire format. The one `@contract` test against the real sandbox then only
+has to confirm the sandbox agrees with the stub.
 
 ## Callbacks are pulled, not pushed
 

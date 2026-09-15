@@ -28,6 +28,7 @@
 import type { MpesaAdapter } from './adapter.js';
 import { MpesaTimeoutError } from './adapter.js';
 import { scenarioFor, type FakeScenario } from './scenario.js';
+import { minorToKes } from './wire.js';
 import {
   STK_RESULT,
   B2C_RESULT,
@@ -104,6 +105,9 @@ export class FakeAdapter implements MpesaAdapter {
   // -------------------------------------------------------------------------
 
   async stkPush(req: StkPushRequest): Promise<StkPushAck> {
+    // Same validation the real adapter applies, so a test cannot pass with an
+    // amount prod would refuse.
+    minorToKes(req.amountMinor);
     const scenario = scenarioFor(req.amountMinor, req.scenarioHint);
     const n = this.next();
     const merchantRequestId = `fake-mr-${n}`;
@@ -167,6 +171,7 @@ export class FakeAdapter implements MpesaAdapter {
   }
 
   async b2cPayment(req: B2CRequest): Promise<B2CAck> {
+    minorToKes(req.amountMinor);
     const scenario = scenarioFor(req.amountMinor, req.scenarioHint);
     const n = this.next();
     const conversationId = `AG_fake_${String(n).padStart(6, '0')}`;
@@ -322,8 +327,8 @@ export class FakeAdapter implements MpesaAdapter {
     if (resultCode === STK_RESULT.SUCCESS) {
       stkCallback.CallbackMetadata = {
         Item: [
-          // Daraja reports Amount in KES as a JSON number (1, 1.5, 250).
-          { Name: 'Amount', Value: record.request.amountMinor / 100 },
+          // Daraja reports Amount in KES as a JSON number.
+          { Name: 'Amount', Value: minorToKes(record.request.amountMinor) },
           { Name: 'MpesaReceiptNumber', Value: `FAKE${String(n).padStart(6, '0')}` },
           { Name: 'TransactionDate', Value: formatDarajaDate(notBeforeMs) },
           { Name: 'PhoneNumber', Value: Number(record.request.phoneNumber) },
@@ -356,7 +361,7 @@ export class FakeAdapter implements MpesaAdapter {
     if (resultCode === B2C_RESULT.SUCCESS) {
       body.Result.ResultParameters = {
         ResultParameter: [
-          { Key: 'TransactionAmount', Value: record.request.amountMinor / 100 },
+          { Key: 'TransactionAmount', Value: minorToKes(record.request.amountMinor) },
           { Key: 'TransactionReceipt', Value: transactionId },
           { Key: 'ReceiverPartyPublicName', Value: `${record.request.phoneNumber} - Attendant` },
           { Key: 'TransactionCompletedDateTime', Value: formatDarajaDate(notBeforeMs) },
