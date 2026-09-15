@@ -6,6 +6,7 @@
     "services/_shared/ts",
     "services/_shared/mpesa",
     "services/pos",
+    "services/payments",
     "services/web"
   ],
   "engines": {
