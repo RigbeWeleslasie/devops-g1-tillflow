@@ -1,0 +1,4 @@
+{"imageScanFindings":{"enhancedFindings":[
+  {"severity":"CRITICAL","packageVulnerabilityDetails":{"vulnerabilityId":"CVE-2026-A","vulnerablePackages":[{"fixedInVersion":"NotAvailable"}]}},
+  {"severity":"HIGH","packageVulnerabilityDetails":{"vulnerabilityId":"CVE-2026-B","vulnerablePackages":[{"fixedInVersion":"2.1.0"}]}}
+]}}

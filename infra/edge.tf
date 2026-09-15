@@ -129,7 +129,9 @@ resource "aws_lb_target_group" "service" {
 # by the SG pairing instead (ALB accepts the VPC Link SG only, and the ALB has
 # no public IP), which is the control docs/threat-model.md line 47 actually
 # names. Revisit if the capstone acquires a domain.
-# trivy:ignore:AWS-0054 accepted: internal-only hop, no public ingress; public TLS terminates at API Gateway. Owner: meron. Expiry: G5.
+# Accepted risk: internal-only hop, no public ingress; public TLS terminates
+# at API Gateway. Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0054
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80

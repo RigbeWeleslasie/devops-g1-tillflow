@@ -99,11 +99,41 @@ new SHA.
 
 ## 3. Destroy / rebuild (G5)
 
+Rebuild is two phases, and the order matters. ECR repositories are recreated
+**empty**, so nothing can reference an image digest on the first apply.
+
+```bash
+# --- teardown -------------------------------------------------------------
+make destroy                      # main stack, then bootstrap
+./infra/scripts/audit.sh --cleanup   # asserts nothing devops-g1-* survives
+
+# --- phase 1: infrastructure, no workloads --------------------------------
+make bootstrap                    # tfstate bucket + DynamoDB lock
+terraform -chdir=infra init
+terraform -chdir=infra apply -var 'service_images={}'
 ```
-make destroy          # terraform destroy all roots (services stack, then bootstrap)
-# verify: no devops-g1-* resources remain (script in infra/scripts/audit.sh)
-make bootstrap        # recreate tfstate bucket + lock
-make deploy           # full apply + pipeline
-make smoke            # end-to-end
+
+`-var 'service_images={}'` is required on the first apply, and beats any local
+`infra/terraform.tfvars` left over from before the destroy (a `-var` wins over
+the auto-loaded file). Every service resolves to no image and stays at
+`desiredCount 0` -- correct, because nothing has been built for this account
+yet. Without it, a stale digest points at a repository that was just recreated
+empty and every task fails `CannotPullContainerError`.
+
+The file is gitignored for the same reason: an auto-loaded committed digest
+would make CI's apply reintroduce exactly that failure.
+
+```bash
+# --- phase 2: first release ----------------------------------------------
+./infra/scripts/deploy.sh pos     # builds, pushes, deploys by digest,
+                                  # scales 0 -> 2, smokes, rolls back on failure
+./infra/scripts/audit.sh          # naming + tags on the rebuilt stack
 ```
+
+`deploy.sh` performs the 0 -> 2 scale-up itself: deploying is the first moment a
+real image exists, so the pipeline owns that transition (Terraform sets the
+initial count, then ignores it -- see the lifecycle block in `infra/ecs.tf`).
+It also writes the local `terraform.tfvars` so a later `terraform apply` knows
+what is running.
+
 Expected wall-clock: to be measured in G5.
