@@ -66,8 +66,17 @@ jobs:
 
       # Re-plan on this commit and apply that plan, rather than a bare
       # `apply -auto-approve`: the applied change is the reviewed change.
+      #
+      # `-var service_images={}` explicitly: the runner has no local
+      # terraform.tfvars (it is gitignored, because a committed digest would not
+      # exist after the G5 rebuild), and this makes that the deliberate state
+      # rather than an accident of the checkout. Services stay at 0 until the
+      # release job below deploys them; the ECS service ignores task_definition,
+      # so this apply never reverts a running release.
       - name: terraform plan
-        run: terraform -chdir=infra plan -input=false -no-color -out=tfplan
+        run: |
+          terraform -chdir=infra plan -input=false -no-color \
+            -var 'service_images={}' -out=tfplan
 
       - name: terraform apply
         run: terraform -chdir=infra apply -input=false -no-color tfplan
@@ -301,13 +310,33 @@ jobs:
 
       - name: Deploy
         run: |
-          # No --desired-count: capacity is Terraform's (var.service_desired_count),
-          # and forcing a number here would silently undo any scaling between
-          # deploys. A deploy changes the image, not the size of the fleet.
+          # A deploy changes the image, not the size of the fleet -- so no
+          # --desired-count here, and any scaling applied between deploys is
+          # preserved.
           aws ecs update-service \
             --cluster "$CLUSTER" \
             --service "devops-g1-${{ matrix.service }}" \
             --task-definition "${{ steps.register.outputs.task_definition }}" >/dev/null
+
+          # Except the first deploy. Terraform sets the initial count but then
+          # ignores it, and CI applies with `service_images={}`, so a service
+          # that has never been deployed sits at 0 and would smoke-test against
+          # an empty target group. Deploying is the event that makes it
+          # runnable; the target comes from Terraform's own variable so the two
+          # cannot drift.
+          desired=$(aws ecs describe-services --cluster "$CLUSTER" \
+            --services "devops-g1-${{ matrix.service }}" \
+            --query 'services[0].desiredCount' --output text)
+
+          if [ "$desired" = "0" ]; then
+            want=$(sed -n '/variable "service_desired_count"/,/^}/p' infra/variables.tf |
+              sed -n "s/^[[:space:]]*${{ matrix.service }}[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p" | head -1)
+            want="${want:-2}"
+            echo "first deploy — scaling devops-g1-${{ matrix.service }} to $want"
+            aws ecs update-service --cluster "$CLUSTER" \
+              --service "devops-g1-${{ matrix.service }}" \
+              --desired-count "$want" >/dev/null
+          fi
 
           # The service has a deployment circuit breaker with rollback enabled,
           # so a failing rollout reverts on its own; this just waits it out.

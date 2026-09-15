@@ -314,12 +314,30 @@ locals {
   # created by this same Terraform, so on a fresh apply -- or after the G5
   # destroy/rebuild -- the digest does not exist and every task fails with
   # CannotPullContainerError.
+  # Empty unless explicitly supplied. Nothing about the current release is
+  # committed or inferred.
+  #
+  # Discovering the newest image in ECR was tried and is wrong: PR checks build
+  # every service, so "an image exists" is not "this service is deployed" -- it
+  # would have scaled up web, payments and commission from images that were only
+  # ever built for a scan.
+  #
+  # The release is passed in by whoever performs it (deploy.sh and deploy.yml
+  # both do), which keeps the committed defaults rebuildable: on a fresh account
+  # every service resolves to "" and stays at 0 until something deploys it.
   service_image = {
     for s in local.services : s => trimspace(lookup(var.service_images, s, ""))
   }
 
-  # A service runs only when it has an image. This is what keeps
-  # `terraform apply` honest on a rebuilt account rather than only on this one.
+  # A service runs only when it has an image, so a fresh apply never starts a
+  # task that can only crash-loop against a placeholder it cannot serve from.
+  #
+  # This is also why `desired_count` is back in `ignore_changes` below: CI
+  # applies with `service_images={}` (there is no committed digest -- see above),
+  # which would otherwise compute 0 and scale a running service down on every
+  # deploy, before the release job built it back up. Terraform sets the initial
+  # count; after that ECS owns it, and the pipeline is what scales a service up
+  # by deploying to it.
   service_scale = {
     for s in local.services : s => (
       local.service_image[s] != "" ? lookup(var.service_desired_count, s, 0) : 0
@@ -520,7 +538,7 @@ resource "aws_ecs_service" "service" {
   # smoke gets a 503 from an empty target group, and a perfectly good deploy
   # rolls back. Scale is a declarative property, so it belongs here.
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes = [task_definition, desired_count]
   }
 
   tags = {

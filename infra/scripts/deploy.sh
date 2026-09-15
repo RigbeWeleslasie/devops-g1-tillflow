@@ -106,18 +106,57 @@ aws ecs update-service --cluster "$CLUSTER" \
   --service "${PREFIX}-${SERVICE}" \
   --task-definition "$task_def" >/dev/null
 
-# A service at 0 will "stabilise" instantly and then fail smoke with a 503 from
-# an empty target group, which reads as a broken deploy rather than a service
-# that was never scaled up. Say so plainly instead.
+# Scale up on the first deploy.
+#
+# Terraform sets the initial count but then ignores it (ecs.tf lifecycle), so a
+# service that has never been deployed sits at 0. Deploying IS the event that
+# makes a service runnable -- it is the first moment a real image exists -- so
+# the pipeline owns this transition. The target comes from Terraform's variable,
+# not a number invented here, so the two cannot drift.
 desired="$(aws ecs describe-services --cluster "$CLUSTER" \
   --services "${PREFIX}-${SERVICE}" \
   --query 'services[0].desiredCount' --output text)"
 
 if [[ "$desired" == "0" ]]; then
-  echo "ERROR: ${PREFIX}-${SERVICE} has desiredCount=0, so nothing will run."
-  echo "       Set service_desired_count[\"$SERVICE\"] in infra/variables.tf and apply."
-  exit 1
+  want="$(sed -n "/variable \"service_desired_count\"/,/^}/p" \
+    "${repo_root}/infra/variables.tf" |
+    sed -n "s/^[[:space:]]*${SERVICE}[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p" | head -1)"
+  want="${want:-2}"
+
+  echo "${PREFIX}-${SERVICE} is at 0 — first deploy, scaling to ${want}"
+  aws ecs update-service --cluster "$CLUSTER" \
+    --service "${PREFIX}-${SERVICE}" \
+    --desired-count "$want" >/dev/null
 fi
+
+# Keep Terraform's view of this service in step with what was just deployed.
+# Nothing records the release in git (a committed digest would break the G5
+# rebuild -- the repository is recreated empty), so the local tfvars is written
+# here, gitignored, and rebuilt by the next deploy.
+tfvars="${repo_root}/infra/terraform.tfvars"
+python3 - "$tfvars" "$SERVICE" "$image" <<'PY'
+import pathlib, re, sys
+path, svc, image = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(path)
+services = ["web", "pos", "payments", "commission"]
+cur = {s: "" for s in services}
+if p.exists():
+    for s in services:
+        m = re.search(rf'^\s*{s}\s*=\s*"([^"]*)"', p.read_text(), re.M)
+        if m:
+            cur[s] = m.group(1)
+cur[svc] = image
+body = "\n".join(f'  {s:<10} = "{cur[s]}"' for s in services)
+p.write_text(
+    "# Deployed images -- written by infra/scripts/deploy.sh, gitignored.\n"
+    "#\n"
+    "# NOT committed: a digest inside our own ECR does not exist after the G5\n"
+    "# destroy/rebuild, and an auto-loaded tfvars would make CI try to pull it.\n"
+    "# First apply on a rebuilt account:  terraform apply -var 'service_images={}'\n"
+    f"service_images = {{\n{body}\n}}\n"
+)
+PY
+echo "recorded in infra/terraform.tfvars (gitignored)"
 
 echo "waiting for the service to stabilise..."
 if ! aws ecs wait services-stable --cluster "$CLUSTER" --services "${PREFIX}-${SERVICE}"; then

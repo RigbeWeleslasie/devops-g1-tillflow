@@ -23,6 +23,26 @@ red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 dim()   { printf '\033[2m%s\033[0m\n' "$*"; }
 
+# A service at desiredCount 0 is not a failure -- it has simply not been
+# deployed yet. At G1 only `pos` runs; web, payments and commission get their own
+# code in G2.
+#
+# This check must sit ABOVE the commission branch, not inside it: any push
+# touching services/_shared/ fans the deploy matrix to all four services, so
+# web and payments would otherwise take the HTTP path, 503 against an empty
+# target group, and roll back a perfectly good deploy. Skipping loudly is right;
+# silently passing (`running == desired` is true at 0 == 0) would make the smoke
+# test unable to fail on an empty service, which is no gate at all.
+svc_desired="$(aws ecs describe-services \
+  --cluster "${CLUSTER:-$PREFIX}" --services "${PREFIX}-${SERVICE}" \
+  --query 'services[0].desiredCount' --output text 2>/dev/null || echo "")"
+
+if [[ "$svc_desired" == "0" ]]; then
+  dim "SKIP  ${SERVICE}: desiredCount=0 — not deployed yet, nothing to smoke."
+  dim "      Expected until this service has its own workload (G2)."
+  exit 0
+fi
+
 # `commission` is a worker: no target group, no listener rule (edge.tf). A
 # /commission/* request would fall through to the web_default rule and read
 # WEB's /version -- passing for the wrong reason and hiding a broken deploy.
@@ -33,19 +53,6 @@ if [[ "$SERVICE" == "commission" ]]; then
   read -r desired running <<<"$(aws ecs describe-services \
     --cluster "${CLUSTER:-$PREFIX}" --services "${PREFIX}-${SERVICE}" \
     --query 'services[0].[desiredCount,runningCount]' --output text)"
-
-  # desiredCount 0 is a legitimate state at G1 -- commission has no workload yet
-  # -- so this is a SKIP, loudly, not a pass and not a failure.
-  #
-  # `running == desired` alone would silently pass at 0 == 0 (a smoke test that
-  # cannot fail on an empty service is not a gate). Hard-failing instead is just
-  # as wrong: any push touching services/_shared/ fans the matrix to all four
-  # services, and commission would then roll back a perfectly good deploy.
-  if [[ "$desired" == "0" ]]; then
-    dim "SKIP  ${SERVICE}: desiredCount=0 — not scaled up yet, nothing to smoke."
-    dim "      This is expected until the service has its own workload (G2)."
-    exit 0
-  fi
 
   if [[ "$running" != "$desired" ]]; then
     red "FAIL  ${SERVICE}: running=$running desired=$desired"

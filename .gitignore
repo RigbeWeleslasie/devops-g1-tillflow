@@ -15,9 +15,6 @@ secrets/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
-# The deployed-image record is not a secret -- it is a digest, and CI needs it
-# to apply what is actually running. Credentials never go in a tfvars file.
-!infra/terraform.tfvars
 crash.log
 crash.*.log
 override.tf
