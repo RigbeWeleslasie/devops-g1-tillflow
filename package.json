@@ -1,0 +1,18 @@
+{
+  "name": "tillflow",
+  "private": true,
+  "description": "TillFlow / devops-g1 — npm workspaces root. Each service still builds and deploys independently (own Dockerfile, own image) per the brief's path-filtered pipeline; workspaces exist so services share @tillflow/shared without duplicating it.",
+  "workspaces": [
+    "services/_shared/ts",
+    "services/pos",
+    "services/web"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  }
+}

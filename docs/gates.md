@@ -38,6 +38,36 @@ pipeline deploy. **Blocked if:** manual infra, broken naming/tags, or no repeata
 Sale → STK callback → paid; close → commission → B2C; state/idempotency tests.
 **Blocked if:** happy path only, unsafe money state, or a direct Daraja call from Commission.
 
+### Track A — Product + POS (Rigbe): status
+- [x] Shared TypeScript scaffolding unblocked (`services/_shared/ts` — money/events/otel/health;
+      see `docs/scar-log.md` for why this landed on Track A instead of waiting on Platform)
+- [x] `services/pos` — tenant setup, sale state machine, `POST /sales` (idempotent,
+      server-computed totals), `POST /sales/{id}/pay`, `GET /sales/{id}`, `sale.paid`
+      consumer, migrations for `pos_*`
+- [x] `services/web` — owner/attendant shell, proxies to POS, no DB of its own
+- [x] I1 (idempotency) and IDOR proven with real, passing tests — 29/29 across
+      `@tillflow/shared` + `@tillflow/pos` + `@tillflow/web` (`evidence/product-pos/`)
+- [x] Failure-path tests alongside every success test (timeout → stays `UNPAID`,
+      malformed `sale.paid` event left unacked, same-key-different-body → 409, etc.) —
+      the "happy path only" blocker specifically
+- [ ] Not yet done: real Postgres/RDS run (tests are pg-mem-backed only), Docker build of
+      either service (`Dockerfile`s written, untested — no Docker available), and
+      integration with a real Payments service (Track B, Nebyat)
+- [ ] Not yet done: deployed to ECS / exercised through the pipeline
+
+### Track B — Payments + integrity (Nebyat): not started in this pass
+See `docs/ownership.md` for the DRI and required invariants (I2–I5).
+
+### Cross-cutting G2 blockers — status
+- **Happy path only:** cleared for Track A (see above). Track B's own failure-path
+  coverage is Nebyat's to prove.
+- **Unsafe money state:** integer minor units end to end, one documented rounding rule
+  (`@tillflow/shared/money`, tested). I2/I3/I5 are Track B's to prove.
+- **Direct Daraja call from Commission:** N/A yet — Commission (`services/commission/`)
+  hasn't been built in this pass; the architectural guarantee (no Daraja creds, Payments
+  is the only caller) is documented in `docs/architecture.md` §3 and enforced at the IAM
+  layer per `infra/iam.tf`, pending the service itself.
+
 ## G3 — Operate (D11)
 Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
 **Blocked if:** no external probe, no per-service budget, or no actionable alert.

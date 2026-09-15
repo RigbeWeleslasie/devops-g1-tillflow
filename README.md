@@ -87,4 +87,8 @@ make destroy       # tear everything down
 
 ## Status
 
-G0 in progress — see [`docs/`](docs/) and open PR `g0-decide`.
+G0 and G1 (platform golden path) landed on `main`. G2 Track A (Product + POS — sale
+creation, idempotency, IDOR, the `sale.paid` consumer, the web shell) is built and tested
+on `feat/g2-pos-track-a`; see `docs/gates.md` for exactly what's proven vs. still open, and
+`evidence/product-pos/` for reproduction commands. Track B (Payments + integrity) not yet
+started.

@@ -1,0 +1,23 @@
+# Both services/pos/Dockerfile and services/web/Dockerfile build from the
+# repo root (they depend on services/_shared/ts as an npm workspace). Keep
+# the build context to what those Dockerfiles actually COPY.
+.git/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage/
+**/coverage/
+
+docs/
+evidence/
+k6/
+infra/
+.github/
+
+*.md
+.env
+.env.*
+!.env.example

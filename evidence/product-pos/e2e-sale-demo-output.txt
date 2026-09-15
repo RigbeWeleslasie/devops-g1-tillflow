@@ -1,0 +1,95 @@
+Tenant: Test Shop 766047d1-a813-4a9b-b0a4-3bc62fb6fe65
+Attendant: b0b68b02-d6dc-4626-97d8-89d62fdf50b2
+Product: Widget @ 25000 minor units
+
+--- Step 1: POST /sales (3x product, Idempotency-Key required) ---
+-> 201 {
+  "id": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+  "tenantId": "766047d1-a813-4a9b-b0a4-3bc62fb6fe65",
+  "attendantId": "b0b68b02-d6dc-4626-97d8-89d62fdf50b2",
+  "status": "UNPAID",
+  "totalMinor": 75000,
+  "chargeId": null,
+  "createdAt": "2026-09-15T13:01:47.936Z",
+  "updatedAt": "2026-09-15T13:01:47.936Z",
+  "paidAt": null,
+  "items": [
+    {
+      "id": "c9c18e27-5926-48e5-9fa3-b6375ab8b8a1",
+      "saleId": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+      "productId": "2428fa9b-cc7c-4467-b594-d6cde2f7cd92",
+      "quantity": 3,
+      "unitPriceMinor": 25000
+    }
+  ]
+}
+
+--- Step 2: Duplicate POST /sales, SAME Idempotency-Key + body (I1 proof) ---
+-> status 201 (same as step 1)
+-> same sale id? true
+-> sale rows in DB for this tenant: 1 (must be 1)
+
+--- Step 3: Same Idempotency-Key, DIFFERENT body -> 409 (I1 proof) ---
+-> status 409 {"error":"idempotency_key_conflict","message":"Idempotency-Key 0598f024-6166-496e-a7d8-93ac35fa9345 was already used with a different request body"}
+
+--- Step 4: POST /sales/{id}/pay -> POS calls Payments POST /charges ---
+-> 202 {
+  "sale": {
+    "id": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+    "tenantId": "766047d1-a813-4a9b-b0a4-3bc62fb6fe65",
+    "attendantId": "b0b68b02-d6dc-4626-97d8-89d62fdf50b2",
+    "status": "UNPAID",
+    "totalMinor": 75000,
+    "chargeId": "47bd5324-004d-4949-a1a4-de5d8c419ef6",
+    "createdAt": "2026-09-15T13:01:47.936Z",
+    "updatedAt": "2026-09-15T13:01:47.936Z",
+    "paidAt": null,
+    "items": [
+      {
+        "id": "c9c18e27-5926-48e5-9fa3-b6375ab8b8a1",
+        "saleId": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+        "productId": "2428fa9b-cc7c-4467-b594-d6cde2f7cd92",
+        "quantity": 3,
+        "unitPriceMinor": 25000
+      }
+    ]
+  },
+  "charge": {
+    "status": "PENDING",
+    "chargeId": "47bd5324-004d-4949-a1a4-de5d8c419ef6"
+  }
+}
+   Payments client saw: {"saleId":"94c3740b-33c5-43be-a1a2-b0f14194f3f1","amountMinor":75000,"tenantTill":"123456"}
+
+--- Step 5: GET /sales/{id} — still UNPAID (pay only initiates the charge) ---
+-> status: UNPAID
+
+--- Step 6: Payments confirms -> publishes sale.paid -> POS consumer applies it ---
+-> consumer handled 1 message(s)
+
+--- Step 7: GET /sales/{id} — now PAID ---
+-> {
+  "id": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+  "tenantId": "766047d1-a813-4a9b-b0a4-3bc62fb6fe65",
+  "attendantId": "b0b68b02-d6dc-4626-97d8-89d62fdf50b2",
+  "status": "PAID",
+  "totalMinor": 75000,
+  "chargeId": "47bd5324-004d-4949-a1a4-de5d8c419ef6",
+  "createdAt": "2026-09-15T13:01:47.936Z",
+  "updatedAt": "2026-09-15T13:01:47.946Z",
+  "paidAt": "2026-09-15T13:01:47.946Z",
+  "items": [
+    {
+      "id": "c9c18e27-5926-48e5-9fa3-b6375ab8b8a1",
+      "saleId": "94c3740b-33c5-43be-a1a2-b0f14194f3f1",
+      "productId": "2428fa9b-cc7c-4467-b594-d6cde2f7cd92",
+      "quantity": 3,
+      "unitPriceMinor": 25000
+    }
+  ]
+}
+
+--- Step 8: IDOR check: a different tenant cannot read this sale ---
+-> status: 404 {"error":"not_found"} (must be 404, not 403)
+
+Demo complete.
