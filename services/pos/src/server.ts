@@ -11,11 +11,12 @@ const port = Number(process.env['PORT'] ?? 8080);
 const databaseUrl = requireEnv('DATABASE_URL');
 const jwtSecret = requireEnv('JWT_SECRET');
 const paymentsBaseUrl = requireEnv('PAYMENTS_BASE_URL');
+const serviceToken = requireEnv('SERVICE_TOKEN');
 
 const db = createPool(databaseUrl);
 const paymentsClient = new HttpPaymentsClient({ baseUrl: paymentsBaseUrl });
 
-const app = await buildApp({ db, paymentsClient, jwtSecret });
+const app = await buildApp({ db, paymentsClient, jwtSecret, serviceToken });
 
 app.addHook('onClose', async () => {
   await db.end();

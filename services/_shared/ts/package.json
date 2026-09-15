@@ -11,7 +11,8 @@
     "./money": "./dist/money.js",
     "./events": "./dist/events.js",
     "./otel": "./dist/otel.js",
-    "./health": "./dist/health.js"
+    "./health": "./dist/health.js",
+    "./serviceAuth": "./dist/serviceAuth.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -23,7 +24,8 @@
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/sdk-node": "0.222.0",
     "@opentelemetry/auto-instrumentations-node": "0.80.0",
-    "@opentelemetry/exporter-trace-otlp-grpc": "0.222.0"
+    "@opentelemetry/exporter-trace-otlp-grpc": "0.222.0",
+    "fastify-plugin": "6.0.0"
   },
   "devDependencies": {
     "fastify": "5.12.4",

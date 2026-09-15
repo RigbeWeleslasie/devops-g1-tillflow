@@ -18,6 +18,8 @@ import {
 } from '../src/services/saleService.js';
 import { FakePaymentsClient } from './fakes/fakePaymentsClient.js';
 
+const TEST_SERVICE_TOKEN = 'test-service-token-0123456789abcdef';
+
 test('service layer: duplicate POST /sales body returns the first response, creates no second row', async () => {
   const { db } = createTestDb();
   const { tenant, attendant, product } = await seedTenant(db);
@@ -68,7 +70,7 @@ test('service layer: same key, different body -> IdempotencyConflictError (maps 
 test('HTTP layer: POST /sales requires Idempotency-Key', async () => {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db);
-  const app = await buildApp({
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN,
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',
@@ -90,7 +92,7 @@ test('HTTP layer: POST /sales requires Idempotency-Key', async () => {
 test('HTTP layer: duplicate POST /sales (same key, same body) returns identical 201s and one row', async () => {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db);
-  const app = await buildApp({
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN,
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',
@@ -125,7 +127,7 @@ test('HTTP layer: duplicate POST /sales (same key, same body) returns identical 
 test('HTTP layer: same Idempotency-Key, different body -> 409', async () => {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db);
-  const app = await buildApp({
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN,
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',

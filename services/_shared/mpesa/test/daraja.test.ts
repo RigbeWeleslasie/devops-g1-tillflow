@@ -56,7 +56,6 @@ describe('DarajaAdapter against the stub-server', () => {
 
   test('STK push: OAuth then push, ack in our shape, callback auto-delivered to the URL we gave', async () => {
     const a = adapter();
-    const before = delivered.length;
 
     const ack = await a.stkPush({
       amountMinor: toMinorUnits(25_000),
@@ -70,9 +69,11 @@ describe('DarajaAdapter against the stub-server', () => {
     assert.equal(ack.responseCode, '0');
     assert.match(ack.checkoutRequestId, /^ws_CO_fake_/);
 
-    // The stub flushes every 20ms; wait for delivery.
-    await waitFor(() => delivered.length > before);
-    const cb = delivered[delivered.length - 1]!;
+    // The stub flushes on a timer and other tests have callbacks in flight
+    // (the delayed-callback scenario in particular), so find OURS by its
+    // reference rather than assuming it is the most recent arrival.
+    await waitFor(() => delivered.some((c) => c.reference === ack.checkoutRequestId));
+    const cb = delivered.find((c) => c.reference === ack.checkoutRequestId)!;
     assert.equal(cb.url, 'http://payments.local/callbacks/stk');
     const body = cb.body as StkCallbackBody;
     assert.equal(body.Body.stkCallback.CheckoutRequestID, ack.checkoutRequestId);
@@ -127,7 +128,6 @@ describe('DarajaAdapter against the stub-server', () => {
 
   test('B2C: ack echoes our originator id; result auto-delivered to the result URL', async () => {
     const a = adapter();
-    const before = delivered.length;
 
     const ack = await a.b2cPayment({
       amountMinor: toMinorUnits(150_000),
@@ -141,8 +141,9 @@ describe('DarajaAdapter against the stub-server', () => {
     assert.equal(ack.originatorConversationId, 'ledger-xyz');
     assert.match(ack.conversationId, /^AG_fake_/);
 
-    await waitFor(() => delivered.length > before);
-    assert.equal(delivered[delivered.length - 1]!.url, 'http://payments.local/callbacks/b2c');
+    await waitFor(() => delivered.some((c) => c.reference === ack.conversationId));
+    const cb = delivered.find((c) => c.reference === ack.conversationId)!;
+    assert.equal(cb.url, 'http://payments.local/callbacks/b2c');
   });
 
   test('timeout scenario: the stub holds the socket, the adapter gives up with MpesaTimeoutError', async () => {

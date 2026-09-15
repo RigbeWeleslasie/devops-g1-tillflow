@@ -1,17 +1,19 @@
 /**
- * Service-to-service auth for the internal command routes (/charges,
- * /payouts, /admin/*). These are reachable from the internet through API
- * Gateway — it proxies every path to the ALB — so a caller must present the
- * shared X-Service-Token (Secrets Manager `devops-g1/service-token`, injected
- * as SERVICE_TOKEN). threat-model.md §3.2 calls this the G2 "authz header".
+ * Service-to-service auth for internal command routes.
  *
- * Daraja callbacks are deliberately NOT behind this: Safaricom cannot send our
- * header. They are protected differently — a callback only applies if its
- * CheckoutRequestID / ConversationID matches a charge/payout WE issued, and
- * its amount matches ours (chargeService / payoutService).
+ * API Gateway proxies every path to the ALB, so a route like POST /charges
+ * or GET /internal/daily-close is reachable from the internet even though
+ * only another service should ever call it. A shared bearer token
+ * (Secrets Manager `devops-g1/service-token`, injected as SERVICE_TOKEN)
+ * is the G2 "authz header" threat-model.md §3.2 calls for.
  *
- * Constant-time compare so the token can't be recovered byte by byte from
- * response timing.
+ * Lives here rather than in one service because POS and Payments both need
+ * it and a second copy would be a second thing to get wrong. Path is
+ * co-owned (CODEOWNERS: /services/_shared/ -> @meronkahsay @nebyathhailu).
+ *
+ * Provider callbacks are deliberately NOT behind this — Safaricom cannot
+ * send our header. Those are guarded by reference matching and amount
+ * cross-checks instead.
  */
 import fp from 'fastify-plugin';
 import { timingSafeEqual } from 'node:crypto';
@@ -27,7 +29,10 @@ declare module 'fastify' {
   }
 }
 
-export default fp<ServiceAuthOptions>(async function serviceAuthPlugin(app: FastifyInstance, opts) {
+export const serviceAuthPlugin = fp<ServiceAuthOptions>(async function serviceAuthPlugin(
+  app: FastifyInstance,
+  opts,
+) {
   if (!opts.serviceToken || opts.serviceToken.length < 16) {
     throw new Error('SERVICE_TOKEN must be set and at least 16 characters');
   }
@@ -40,8 +45,12 @@ export default fp<ServiceAuthOptions>(async function serviceAuthPlugin(app: Fast
       return reply.code(401).send({ error: 'unauthorized', reason: 'missing X-Service-Token' });
     }
     const got = Buffer.from(presented, 'utf8');
+    // Length-check first: timingSafeEqual throws on a length mismatch, and
+    // comparing lengths leaks nothing an attacker cannot already measure.
     if (got.length !== expected.length || !timingSafeEqual(got, expected)) {
       return reply.code(401).send({ error: 'unauthorized', reason: 'invalid X-Service-Token' });
     }
   });
 });
+
+export default serviceAuthPlugin;
