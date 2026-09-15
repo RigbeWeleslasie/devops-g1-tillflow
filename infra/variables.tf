@@ -112,27 +112,27 @@ variable "task_memory" {
 
 variable "service_images" {
   description = <<-EOT
-    Image per service, digest-pinned by the pipeline on every deploy.
+    Image per service. Empty by default, which means "use the public bootstrap
+    image" (see local.service_image in ecs.tf); the pipeline overrides with a
+    digest-pinned image from our own ECR on every deploy.
 
-    The default must be SELF-HEALTHY: ECS and the ALB probe /health and /ready,
-    and busybox serves neither, so a service defaulted to it crash-loops on a
-    bare `terraform apply` and the golden path only works after a pipeline run.
-    The shared reference image (services/_shared/docker) answers both, so
-    `terraform apply` alone brings up a healthy service -- the pipeline then
-    replaces the image with the same app built from the current commit.
+    The default must NOT reference our own ECR. A digest inside a repository
+    this same Terraform creates does not exist on a fresh apply -- or after the
+    destroy/rebuild G5 grades -- and every service then fails with
+    CannotPullContainerError. The ECR lifecycle policy (keep 20, tagStatus any)
+    would expire it eventually even on this account.
 
-    Never a `latest` tag: this digest is pinned, and deploys use the digest that
-    the commit-SHA tag resolves to.
+    It must also be SELF-HEALTHY: ECS and the ALB probe /health and /ready, so a
+    placeholder that serves neither (busybox) crash-loops until a pipeline run.
+
+    Never a `latest` tag anywhere.
   EOT
   type        = map(string)
   default = {
-    # Shared golden-path image (devops-g1/pos, built from services/_shared/docker).
-    # Refresh with: aws ecr describe-images --repository-name devops-g1/pos \
-    #   --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageDigest'
-    web        = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
-    pos        = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
-    payments   = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
-    commission = "240462142849.dkr.ecr.us-east-1.amazonaws.com/devops-g1/pos@sha256:dde9e44dc6977b72d190243e8893f78bfb9dbda6b4cc5f044241a4010bb80a4f"
+    web        = ""
+    pos        = ""
+    payments   = ""
+    commission = ""
   }
 }
 

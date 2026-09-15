@@ -300,6 +300,35 @@ locals {
   # 0 for services with no image yet. `bootstrap_image` lets the golden-path
   # service come up before any application code exists.
   adot_image = "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.3"
+
+  # Which services have a real image, and which are still un-deployed.
+  #
+  # A service with no image cannot be made healthy by picking a cleverer
+  # placeholder: /health and /ready are OUR contract, and a stock public image
+  # does not serve them (busybox has no HTTP at all; nginx 404s on both --
+  # measured, not assumed). So the honest model is that a service is either
+  # deployed or it is scaled to zero, and `terraform apply` on a fresh account
+  # brings up exactly the services whose image has been supplied.
+  #
+  # The default must NOT be a digest inside our own ECR: that repository is
+  # created by this same Terraform, so on a fresh apply -- or after the G5
+  # destroy/rebuild -- the digest does not exist and every task fails with
+  # CannotPullContainerError.
+  service_image = {
+    for s in local.services : s => trimspace(lookup(var.service_images, s, ""))
+  }
+
+  # A service runs only when it has an image. This is what keeps
+  # `terraform apply` honest on a rebuilt account rather than only on this one.
+  service_scale = {
+    for s in local.services : s => (
+      local.service_image[s] != "" ? lookup(var.service_desired_count, s, 0) : 0
+    )
+  }
+
+  # Placeholder for the task definition only -- a task definition must name an
+  # image even when the service is scaled to 0 and will never pull it.
+  placeholder_image = "public.ecr.aws/docker/library/busybox:1.36"
 }
 
 resource "aws_ecs_task_definition" "service" {
@@ -322,7 +351,7 @@ resource "aws_ecs_task_definition" "service" {
     # --- application -------------------------------------------------------
     {
       name  = each.key
-      image = var.service_images[each.key]
+      image = local.service_image[each.key] != "" ? local.service_image[each.key] : local.placeholder_image
 
       essential = true
 
@@ -443,7 +472,10 @@ resource "aws_ecs_service" "service" {
   launch_type     = "FARGATE"
 
   # 0 until the pipeline has pushed a real image for this service.
-  desired_count = var.service_desired_count[each.key]
+  # local.service_scale, not the raw variable: a service with no image stays at
+  # 0 however the variable is set, so a fresh apply can never start tasks that
+  # would only crash-loop against a placeholder they cannot serve from.
+  desired_count = local.service_scale[each.key]
 
   # Rolling deploy with circuit breaker: a failing deployment rolls back to the
   # last healthy task set automatically. This is the "broken release" rollback

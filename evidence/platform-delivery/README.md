@@ -100,7 +100,7 @@ aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 \
 aws ecs describe-tasks --cluster devops-g1 \
   --tasks "$(aws ecs list-tasks --cluster devops-g1 --service-name devops-g1-pos \
              --desired-status RUNNING --query 'taskArns[0]' --output text)" \
-  --query 'tasks[0].containers[].{Name:name,Health:healthStatus}' --output table
+  --query 'tasks[0].containers[].{Name:name,Health:healthStatus,Status:lastStatus}' --output table
 aws logs tail /devops-g1/pos --since 10m | grep -iE "health_check|Everything is ready"
 ```
 
@@ -159,6 +159,31 @@ at build time (keeping the digest pin, which would otherwise freeze whatever CVE
 the base shipped with), and npm/yarn/corepack are deleted from the runtime stage.
 Dependencies are installed in the `deps` stage and copied in, so nothing in the
 runtime needs them. The findings that remain after that are real ones.
+
+## 5c · The scan gate actually blocks
+
+The ECR gate was corrected three times in review -- the JSON path, then a `// 0`
+default that turned an unreadable scan into zero findings, then Inspector's
+literal `"NotAvailable"` slipping past a `!= ""` test. Each fix was reasonable in
+isolation, which is exactly why "reviewed again" stopped being good evidence.
+
+So it is demonstrated instead, against fixtures covering every branch:
+
+```bash
+./evidence/platform-delivery/scan-gate-verify.sh
+```
+
+```
+  PASS  a fixable CRITICAL must BLOCK
+  PASS  fixedInVersion=NotAvailable must NOT block
+  PASS  fixedInVersion empty must NOT block
+  PASS  no findings must pass
+  PASS  basic scan (no fixability data) must BLOCK
+```
+
+The fixtures are real `describe-image-scan-findings` shapes
+(`scan-gate-fixtures/`), and `scan-gate-test.sh` replays the gate's own jq. A
+change that breaks the filter now fails here rather than in a deploy.
 
 ## 6 · Account guard
 

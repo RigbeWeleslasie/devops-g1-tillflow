@@ -21,6 +21,7 @@ SLEEP="${SLEEP:-10}"
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
+dim()   { printf '\033[2m%s\033[0m\n' "$*"; }
 
 # `commission` is a worker: no target group, no listener rule (edge.tf). A
 # /commission/* request would fall through to the web_default rule and read
@@ -33,13 +34,17 @@ if [[ "$SERVICE" == "commission" ]]; then
     --cluster "${CLUSTER:-$PREFIX}" --services "${PREFIX}-${SERVICE}" \
     --query 'services[0].[desiredCount,runningCount]' --output text)"
 
-  # `running == desired` alone passes at 0 == 0 -- a service scaled to zero
-  # would report SMOKE PASSED with nothing running at all. A smoke test that
-  # cannot fail on an empty service is not a gate.
+  # desiredCount 0 is a legitimate state at G1 -- commission has no workload yet
+  # -- so this is a SKIP, loudly, not a pass and not a failure.
+  #
+  # `running == desired` alone would silently pass at 0 == 0 (a smoke test that
+  # cannot fail on an empty service is not a gate). Hard-failing instead is just
+  # as wrong: any push touching services/_shared/ fans the matrix to all four
+  # services, and commission would then roll back a perfectly good deploy.
   if [[ "$desired" == "0" ]]; then
-    red "FAIL  ${SERVICE}: desiredCount=0 — nothing is running to smoke."
-    red "      Set service_desired_count[\"$SERVICE\"] in infra/variables.tf and apply."
-    exit 1
+    dim "SKIP  ${SERVICE}: desiredCount=0 — not scaled up yet, nothing to smoke."
+    dim "      This is expected until the service has its own workload (G2)."
+    exit 0
   fi
 
   if [[ "$running" != "$desired" ]]; then
