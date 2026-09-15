@@ -18,6 +18,55 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-15 — G2 Track A: real CI run failed on `tsx` not found, despite passing locally
+- **Area:** services/pos, services/web (CI, `.github/workflows/pr-checks.yml`'s `service-ci` job)
+- **What happened:** The actual GitHub Actions run for this PR failed every `services/pos`
+  test file with `ERR_MODULE_NOT_FOUND: Cannot find package 'tsx'`, even though
+  `npm run test --workspace=@tillflow/pos` had passed locally, including on a from-scratch
+  `npm install`. Two compounding gaps, both on this PR's side (not the CI workflow, which
+  is Meron's and correct as written):
+  1. The workflow's "Lint / typecheck" step only runs `npm ci` when the service's
+     `package.json` has a `.scripts.lint` entry; without one it falls through to a
+     "syntax-check whatever JS exists" branch that installs nothing. Neither
+     `services/pos/package.json` nor `services/web/package.json` had a `lint` script, so
+     `npm ci` never ran, and the next step (`npm test`, no install of its own) failed on
+     the first missing devDependency (`tsx`).
+  2. Adding a `lint` script (`tsc --noEmit`) surfaced a second, deeper gap: running from
+     `working-directory: services/pos` (as CI does, and as `npm ci` from that same
+     directory does too — confirmed it correctly resolves the workspace root), nothing
+     ever builds the sibling `@tillflow/shared` workspace first. `npm ci` installs and
+     links it into `node_modules`, but `@tillflow/shared`'s `exports` map points at
+     `./dist/*.js` — compiled output that doesn't exist until *that* package's own
+     `build` script runs. My local testing never caught this because I always ran
+     `npm run build` from the repo root first, building every workspace in dependency
+     order before ever running lint/test.
+  3. Local reproduction happened only by accident of always building shared first. It
+     should have been tested from a service's own directory, matching exactly how CI
+     invokes it (`working-directory:` + no prior root-level build) — the gap between "my
+     build order" and "CI's actual sequence" is exactly what went unnoticed.
+- **Impact:** Caught on the real CI run for this PR; the PR would not have passed review
+  as pushed. No merge, no deploy, no runtime impact.
+- **Root cause:** Package scripts were written and validated against my own habitual
+  invocation order (root-level `npm run build` before anything else), not against the
+  literal sequence the CI workflow actually runs (`cd services/<x> && npm ci` with no
+  root build step, then straight into that package's own `lint`/`test`).
+- **Fix:** Added a real `lint` script (`tsc --noEmit`) to `services/pos/package.json`,
+  `services/web/package.json` and `services/_shared/ts/package.json` — restores the CI
+  workflow's intended `npm ci && npm run lint` path. Added `prelint`/`pretest` scripts to
+  `pos` and `web` that build `@tillflow/shared` first (`npm run build
+  --workspace=@tillflow/shared`, confirmed to resolve correctly from within a service's
+  own directory) — npm auto-runs these before `lint`/`test`, so both now work standalone
+  regardless of invocation order or working directory. Verified by reproducing CI's exact
+  sequence locally from a fully clean state (`rm -rf` every `node_modules`/`dist`, then
+  `cd services/pos && npm ci && npm run lint && npm test`, and the same for `web`) before
+  pushing the fix, not just re-running what had already passed.
+- **Prevention:** When a package/script is meant to be run standalone from its own
+  directory (as every per-service CI job does), test it that way — not via whatever
+  convenient root-level command happens to paper over a missing dependency. A green local
+  `npm run build && npm test` from the repo root is not the same claim as "this passes in
+  CI."
+- **Owner:** Rigbe
+
 ### 2026-09-15 — G2 Track A build: three real bugs caught by actually running the tests
 - **Area:** services/pos, services/web
 - **What happened:** Building POS + the web shell for G2, three genuine bugs surfaced —

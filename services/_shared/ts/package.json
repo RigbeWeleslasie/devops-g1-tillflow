@@ -15,6 +15,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "lint": "tsc --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "node --import tsx --test test/**/*.test.ts"
   },

@@ -6,11 +6,14 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
+    "lint": "tsc --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
     "start": "node dist/server.js",
     "dev": "node --import tsx --watch src/server.ts",
     "migrate": "node --import tsx scripts/migrate.ts",
-    "test": "node --import tsx --test 'test/**/*.test.ts'"
+    "test": "node --import tsx --test 'test/**/*.test.ts'",
+    "prelint": "npm run build --workspace=@tillflow/shared",
+    "pretest": "npm run build --workspace=@tillflow/shared"
   },
   "dependencies": {
     "@tillflow/shared": "*",
