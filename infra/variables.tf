@@ -127,16 +127,22 @@ variable "service_images" {
 
 variable "service_desired_count" {
   description = <<-EOT
-    Running tasks per service. Services start at 0 and are scaled up once the
-    pipeline has pushed a real image, so an apply never leaves failing tasks
-    crash-looping against a placeholder.
+    Running tasks per service; Terraform owns this, the pipeline owns the image.
+
+    Two per HTTP service, so each ALB target group has a healthy target in both
+    AZs -- one task cannot demonstrate the AZ-failure drill, and a rolling deploy
+    with minimum-healthy-percent 100 needs somewhere to put the new task.
+
+    Services whose image is still the placeholder stay at 0: a task crash-looping
+    against busybox would fail the ALB health check and make every deploy look
+    broken. Raise a service to 2 in the same PR that gives it a real image.
   EOT
   type        = map(number)
   default = {
-    web        = 0
-    pos        = 0
-    payments   = 0
-    commission = 0
+    web        = 0 # placeholder image until G2
+    pos        = 2 # golden path: proven end to end
+    payments   = 0 # placeholder image until G2
+    commission = 0 # worker, no ingress; scaled up with its first real image
   }
 }
 
@@ -159,6 +165,16 @@ variable "db_multi_az" {
     Multi-AZ (synchronous standby). ADR 0003 requires it for the RPO~0 story and
     the G4 AZ-failure drill. Set false only to cut cost while iterating, and say
     so in the PR -- it changes the durability claim the SLOs rest on.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "db_performance_insights" {
+  description = <<-EOT
+    Performance Insights. Supported on db.t4g.small (verified on the applied
+    instance -- see the note in data.tf); unsupported on db.t2/t3.micro. Set
+    false if the instance class ever changes to one that refuses it.
   EOT
   type        = bool
   default     = true

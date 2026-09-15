@@ -99,6 +99,38 @@ echo "== Tag audit =="
 all_json="$(aws resourcegroupstaggingapi get-resources \
   --region "$REGION" --output json)"
 
+# --cleanup asks the opposite question: after `terraform destroy`, is anything
+# of ours LEFT? State is empty by then -- that is the success condition, not an
+# error -- and intersecting with state would hide exactly what this mode hunts
+# for: resources that leaked out of Terraform's knowledge. So cleanup selects by
+# tag and name prefix instead, and reports anything still standing.
+if [[ "$MODE" == "--cleanup" ]]; then
+  leftovers="$(jq -r --arg p "$PREFIX" '
+    .ResourceTagMappingList[]
+    | . as $r
+    | ($r.Tags | map({(.Key): .Value}) | add // {}) as $tags
+    | select(
+        ($tags.capstone == "tillflow")
+        or (($tags.Name // "") | startswith($p + "-"))
+        or ($r.ResourceARN | test(":(log-group:/" + $p + "/|[^:]*/" + $p + "-)"))
+      )
+    | $r.ResourceARN
+  ' <<<"$all_json" | sort -u)"
+
+  # Another team runs a devops-g1-iac-* stack in this shared account; theirs must
+  # not be reported as our leftovers.
+  leftovers="$(grep -v -- "-iac-" <<<"$leftovers" || true)"
+
+  if [[ -z "$leftovers" ]]; then
+    green "PASS  nothing tagged capstone=tillflow or named ${PREFIX}-* remains — teardown is clean."
+    exit 0
+  fi
+
+  red "FAIL  $(wc -l <<<"$leftovers" | tr -d ' ') resource(s) survived destroy:"
+  sed 's/^/        /' <<<"$leftovers"
+  exit 1
+fi
+
 # One `state pull` and a single jq walk: `state show` per address would be
 # hundreds of round-trips across a stack this size.
 state_raw="$(terraform -chdir="$_script_dir/.." state pull 2>&1)" || {
@@ -119,6 +151,7 @@ state_arns="$(jq -r '
 if [[ -z "$state_arns" ]]; then
   red "Could not read Terraform state. Run from a clone with the backend initialised:"
   red "  terraform -chdir=infra init"
+  red "(For the post-destroy check use: $0 --cleanup)"
   exit 2
 fi
 
@@ -129,17 +162,7 @@ resources_json="$(jq --argjson owned "$(jq -R . <<<"$state_arns" | jq -s .)" '
 count="$(jq '.ResourceTagMappingList | length' <<<"$resources_json")"
 
 if [[ "$count" == "0" ]]; then
-  if [[ "$MODE" == "--cleanup" ]]; then
-    green "PASS  no capstone=tillflow resources remain — teardown is clean."
-    exit 0
-  fi
-  red "FAIL  no resources found with capstone=tillflow. Nothing deployed, or tags are missing."
-  exit 1
-fi
-
-if [[ "$MODE" == "--cleanup" ]]; then
-  red "FAIL  $count resource(s) still tagged capstone=tillflow after destroy:"
-  jq -r '.ResourceTagMappingList[].ResourceARN' <<<"$resources_json" | sed 's/^/        /'
+  red "FAIL  no resources found in state. Nothing deployed, or the wrong workspace."
   exit 1
 fi
 

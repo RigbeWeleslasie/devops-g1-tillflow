@@ -195,11 +195,19 @@ resource "aws_db_instance" "main" {
   maintenance_window      = "sun:03:30-sun:04:30"
   copy_tags_to_snapshot   = true
 
-  # Verified supported on db.t4g.small (the applied instance reports
-  # PerformanceInsightsEnabled: true). PI is unavailable on the smaller
-  # burstable classes -- db.t2/t3.micro -- not on t4g.small. Kept because the
-  # CPU-credit and load story is what the k6 bottleneck analysis rests on (G3).
-  performance_insights_enabled    = true
+  # Performance Insights.
+  #
+  # Raised twice in review as unsupported on db.t4g.small. Checked against the
+  # applied instance rather than the docs:
+  #
+  #   $ aws rds describe-db-instances --db-instance-identifier devops-g1 \
+  #       --query 'DBInstances[0].{Class:DBInstanceClass,PI:PerformanceInsightsEnabled}'
+  #   { "Class": "db.t4g.small", "PI": true }
+  #
+  # The restriction applies to db.t2/t3.micro, not t4g.small. Kept on, because
+  # the CPU-credit and top-SQL view is what the k6 bottleneck analysis rests on
+  # (G3). The variable below makes it switchable if a future class ever refuses.
+  performance_insights_enabled    = var.db_performance_insights
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   # The capstone must demonstrate destroy/rebuild, so deletion protection is off

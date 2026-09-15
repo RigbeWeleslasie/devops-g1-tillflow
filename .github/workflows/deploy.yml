@@ -193,11 +193,29 @@ jobs:
             exit 1
           fi
 
-          counts=$(aws ecr describe-image-scan-findings \
+          # `describe-image-scan-findings` returns findingSeverityCounts under
+          # `imageScanFindings` (the `...Summary` spelling belongs to
+          # `describe-images`). Reading the wrong path yields null, and
+          # `// 0` then turns "I could not read the scan" into "zero findings" --
+          # the gate passes every image. Fetch the whole document and require the
+          # counts object to exist.
+          raw=$(aws ecr describe-image-scan-findings \
             --repository-name "devops-g1/${{ matrix.service }}" \
             --image-id imageDigest=${{ steps.build.outputs.digest }} \
-            --query 'imageScanFindingsSummary.findingSeverityCounts' --output json) \
+            --output json) \
             || { echo "::error::could not read scan findings — failing closed"; exit 1; }
+
+          counts=$(jq -c '
+            .imageScanFindings.findingSeverityCounts
+            // .imageScanFindingsSummary.findingSeverityCounts
+            // empty
+          ' <<<"$raw")
+
+          if [ -z "$counts" ]; then
+            echo "::error::scan findings had no findingSeverityCounts — failing closed"
+            jq -c 'keys' <<<"$raw" || true
+            exit 1
+          fi
 
           echo "findings: $counts"
           crit=$(jq -r '.CRITICAL // 0' <<<"$counts")

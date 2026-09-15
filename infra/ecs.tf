@@ -464,8 +464,16 @@ resource "aws_ecs_service" "service" {
 
   # The pipeline updates the image; Terraform must not fight it by reverting to
   # whatever image the last apply knew about.
+  # The pipeline owns the IMAGE (it registers a new task-definition revision per
+  # deploy); Terraform owns the SIZE of the fleet.
+  #
+  # `desired_count` was in this list too, which left nobody able to set it: the
+  # workflow stopped passing --desired-count, Terraform was told to ignore it,
+  # and a fresh stack sat at 0/0 -- `wait services-stable` returns instantly,
+  # smoke gets a 503 from an empty target group, and a perfectly good deploy
+  # rolls back. Scale is a declarative property, so it belongs here.
   lifecycle {
-    ignore_changes = [task_definition, desired_count]
+    ignore_changes = [task_definition]
   }
 
   tags = {

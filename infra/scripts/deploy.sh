@@ -99,10 +99,25 @@ task_def="$(aws ecs register-task-definition \
 echo "registered: $task_def"
 
 # --- deploy ----------------------------------------------------------------
+# No --desired-count: scale is Terraform's (var.service_desired_count), the
+# image is the pipeline's. Forcing a number here would silently undo any scaling
+# applied between deploys, and it is what deploy.yml deliberately stopped doing.
 aws ecs update-service --cluster "$CLUSTER" \
   --service "${PREFIX}-${SERVICE}" \
-  --task-definition "$task_def" \
-  --desired-count "${DESIRED_COUNT:-2}" >/dev/null
+  --task-definition "$task_def" >/dev/null
+
+# A service at 0 will "stabilise" instantly and then fail smoke with a 503 from
+# an empty target group, which reads as a broken deploy rather than a service
+# that was never scaled up. Say so plainly instead.
+desired="$(aws ecs describe-services --cluster "$CLUSTER" \
+  --services "${PREFIX}-${SERVICE}" \
+  --query 'services[0].desiredCount' --output text)"
+
+if [[ "$desired" == "0" ]]; then
+  echo "ERROR: ${PREFIX}-${SERVICE} has desiredCount=0, so nothing will run."
+  echo "       Set service_desired_count[\"$SERVICE\"] in infra/variables.tf and apply."
+  exit 1
+fi
 
 echo "waiting for the service to stabilise..."
 if ! aws ecs wait services-stable --cluster "$CLUSTER" --services "${PREFIX}-${SERVICE}"; then
