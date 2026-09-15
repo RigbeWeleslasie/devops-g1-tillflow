@@ -1,0 +1,15 @@
+{
+  // Typechecks the test suite, which tsconfig.json deliberately excludes
+  // (that one is the build: src -> dist, with composite project references).
+  // Without this, a type error in a test is invisible until it throws at
+  // runtime — `npm run lint` would pass while the harness was mistyped.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+}

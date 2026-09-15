@@ -42,6 +42,11 @@ CREATE TABLE charges (
   -- Reconciler bookkeeping (I5): how many times stkQuery has been asked.
   reconcile_attempts   INT NOT NULL DEFAULT 0,
   last_reconciled_at   TIMESTAMPTZ,
+  -- Set when something about this charge does not add up (a callback whose
+  -- amount differs from ours, threat-model.md A1). While set, NO automatic
+  -- path — callback or reconciler — may move it to PAID. A human clears it
+  -- via the runbook. "Never guess" made concrete.
+  hold_reason          TEXT,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   paid_at              TIMESTAMPTZ,

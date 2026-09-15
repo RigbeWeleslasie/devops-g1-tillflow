@@ -7,7 +7,7 @@
  * guarded transition, outbox row — exactly as Daraja's POST would.
  */
 import { randomUUID } from 'node:crypto';
-import type { FastifyInstance, InjectOptions } from 'fastify';
+import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { FakeAdapter, type PendingCallback } from '@tillflow/mpesa';
 import { buildApp } from '../src/app.js';
 import type { Db } from '../src/db.js';
@@ -23,7 +23,7 @@ export interface Harness {
   now: () => number;
   advance: (ms: number) => void;
   /** inject() with the service token already set. */
-  call: (opts: InjectOptions) => ReturnType<FastifyInstance['inject']>;
+  call: (opts: InjectOptions) => Promise<LightMyRequestResponse>;
   close: () => Promise<void>;
 }
 
@@ -59,11 +59,16 @@ export async function createHarness(opts: { startMs?: number } = {}): Promise<Ha
     advance: (ms) => {
       nowMs += ms;
     },
-    call: (o) =>
-      app.inject({
+    call: (o) => {
+      // Build the options as an explicitly typed value: inject() is
+      // overloaded, and a spread literal makes TS pick the chainable
+      // (no-argument) overload instead of the Promise-returning one.
+      const withToken: InjectOptions = {
         ...o,
         headers: { 'x-service-token': SERVICE_TOKEN, ...(o.headers ?? {}) },
-      }),
+      };
+      return app.inject(withToken);
+    },
     close: () => app.close(),
   };
 }

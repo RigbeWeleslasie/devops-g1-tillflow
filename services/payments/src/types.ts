@@ -25,6 +25,7 @@ export interface Charge {
   resolvedBy: 'callback' | 'query' | null;
   reconcileAttempts: number;
   lastReconciledAt: string | null;
+  holdReason: string | null;
   createdAt: string;
   updatedAt: string;
   paidAt: string | null;
@@ -49,6 +50,7 @@ export interface ChargeRow {
   resolved_by: 'callback' | 'query' | null;
   reconcile_attempts: number;
   last_reconciled_at: string | Date | null;
+  hold_reason: string | null;
   created_at: string | Date;
   updated_at: string | Date;
   paid_at: string | Date | null;
@@ -74,6 +76,7 @@ export function rowToCharge(r: ChargeRow): Charge {
     resolvedBy: r.resolved_by,
     reconcileAttempts: r.reconcile_attempts,
     lastReconciledAt: iso(r.last_reconciled_at),
+    holdReason: r.hold_reason,
     createdAt: iso(r.created_at) ?? '',
     updatedAt: iso(r.updated_at) ?? '',
     paidAt: iso(r.paid_at),
