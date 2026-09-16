@@ -354,6 +354,25 @@ data "aws_iam_policy_document" "task_exec_extra" {
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${local.prefix}/${each.key}/*"]
   }
 
+  # The shared service token is the one secret that is deliberately NOT
+  # per-service: POS, Payments and Commission must present the same value to
+  # each other, so a per-service path would guarantee drift. `web` is excluded
+  # -- it is a browser-facing shell and never makes an authenticated
+  # service-to-service call.
+  #
+  # Secrets Manager appends a random 6-character suffix to every ARN, hence the
+  # trailing wildcard; without it the grant matches nothing and the task fails
+  # at boot with AccessDenied rather than anything that names the cause.
+  dynamic "statement" {
+    for_each = each.key == "web" ? [] : [1]
+    content {
+      sid       = "ReadServiceToken"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = ["arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${local.prefix}/service-token-*"]
+    }
+  }
+
   # The ADOT sidecar's config is delivered as an SSM parameter (ecs.tf), and the
   # ECS agent -- not the task -- fetches it at container start. Without this the
   # task cannot be placed at all: ResourceInitializationError, no containers run.

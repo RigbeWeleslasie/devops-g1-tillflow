@@ -135,6 +135,50 @@ resource "aws_secretsmanager_secret_version" "slack_webhook" {
 }
 
 # ---------------------------------------------------------------------------
+# devops-g1/service-token — shared bearer token for service-to-service calls
+#
+# Guards the routes reachable through API Gateway that should only ever be called
+# by another service: POS `/internal/daily-close`, Payments `/charges`,
+# `/payouts` and `/admin/*` (threat-model.md §3.2, and the G2 authz header).
+#
+# Terraform generates this one, like the DB master password: all three services
+# must present the SAME value, so it cannot be set per-service out-of-band
+# without them drifting apart. It never leaves state and Secrets Manager.
+# ---------------------------------------------------------------------------
+
+resource "random_password" "service_token" {
+  length = 48
+  # Alphanumeric only: the value travels in an `x-service-token` HTTP header,
+  # where punctuation invites quoting and encoding bugs for no added entropy --
+  # 48 alphanumerics is ~285 bits, far past the 16-char minimum the services
+  # enforce at boot.
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "service_token" {
+  name        = "${local.prefix}/service-token"
+  description = "Shared bearer token for service-to-service calls (POS /internal/*, Payments /charges, /payouts, /admin/*)"
+  kms_key_id  = aws_kms_key.secrets.arn
+
+  recovery_window_in_days = 0
+
+  tags = {
+    Name    = "${local.prefix}-service-token"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "service_token" {
+  secret_id     = aws_secretsmanager_secret.service_token.id
+  secret_string = jsonencode({ token = random_password.service_token.result })
+
+  # No ignore_changes: Terraform owns this value. Rotating it means one apply
+  # plus a redeploy of all three services -- they must change together, since a
+  # half-rotated fleet fails every internal call with 401.
+}
+
+# ---------------------------------------------------------------------------
 # Per-service secrets
 #
 # iam.tf grants each exec role GetSecretValue on `${prefix}/${service}/*`.
