@@ -116,9 +116,20 @@ export async function applyB2CCallback(body: B2CResultBody, opts: ApplyB2COption
     // paid on that basis — record and leave PENDING for a human. Same
     // reasoning as the STK amount cross-check.
     if (paid) {
-      const reportedKes = Number(resultParameter(body, 'TransactionAmount'));
-      const reportedMinor = Number.isFinite(reportedKes) ? Math.round(reportedKes * 100) : NaN;
-      if (Number.isFinite(reportedMinor) && reportedMinor !== payout.amount_minor) {
+      // Matches the STK side exactly: an amount we cannot verify is not an
+      // amount we accept. A missing or unparseable TransactionAmount used to
+      // skip this check and mark the payout PAID — which meant the weakest
+      // possible callback (one that simply omits the field) got the least
+      // scrutiny. Absent is now treated as mismatched.
+      const raw = resultParameter(body, 'TransactionAmount');
+      const reportedKes = Number(raw);
+      if (raw === undefined || !Number.isFinite(reportedKes)) {
+        return finish(false, {
+          reason: `success callback carried no usable TransactionAmount (got ${JSON.stringify(raw)}); not marking paid`,
+        });
+      }
+      const reportedMinor = Math.round(reportedKes * 100);
+      if (reportedMinor !== payout.amount_minor) {
         return finish(false, {
           reason: `callback amount ${reportedMinor} != payout amount ${payout.amount_minor}`,
         });

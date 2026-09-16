@@ -77,6 +77,14 @@ export interface CreatePayoutInput {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * How many times a B2C request may be sent when previous attempts produced no
+ * acknowledgement at all. Bounded rather than unlimited: if Daraja is silently
+ * accepting requests we cannot see, more attempts make the situation worse,
+ * not better. Past this the payout is surfaced for an operator.
+ */
+export const B2C_MAX_ATTEMPTS = 3;
+
 export function validateCreatePayout(body: unknown): CreatePayoutInput {
   if (typeof body !== 'object' || body === null) {
     throw new ValidationError('invalid_body', 'body must be a JSON object');
@@ -133,9 +141,32 @@ export async function createPayout(
   const { db } = opts;
   const now = opts.now ?? (() => new Date());
 
-  // Fast path: already requested. No send, no write.
+  // Already requested. Normally a no-op — but a payout that is still PENDING
+  // with no conversation_id never reached Daraja (the send timed out or the
+  // connection dropped), so there is nothing to be idempotent ABOUT. Re-send
+  // it, bounded by B2C_MAX_ATTEMPTS.
+  //
+  // Safe to repeat because OriginatorConversationID is our payout id and does
+  // not change between attempts, so a request Daraja DID receive is recognised
+  // as the same one rather than paid twice.
   const existing = await getPayoutByLedgerId(db, input.ledgerId);
-  if (existing) return { payout: existing, created: false };
+  if (existing) {
+    const neverReachedDaraja =
+      existing.status === 'PENDING' &&
+      existing.conversation_id === null &&
+      existing.b2c_attempts < B2C_MAX_ATTEMPTS;
+
+    if (neverReachedDaraja) {
+      const ledgerRes = await db.query<LedgerRow>('SELECT * FROM payout_ledger WHERE id = $1', [input.ledgerId]);
+      const ledgerRow = ledgerRes.rows[0];
+      if (ledgerRow) {
+        await sendB2C(existing.id, ledgerRow, input.scenarioHint, opts);
+        const refreshed = await getPayout(db, existing.id);
+        if (refreshed) return { payout: refreshed, created: false };
+      }
+    }
+    return { payout: existing, created: false };
+  }
 
   const ledgerRes = await db.query<LedgerRow>('SELECT * FROM payout_ledger WHERE id = $1', [input.ledgerId]);
   const ledger = ledgerRes.rows[0];
@@ -172,11 +203,12 @@ export async function createPayout(
     throw err;
   }
 
-  await db.query(
-    `UPDATE payout_ledger SET status = 'REQUESTED', updated_at = $2 WHERE id = $1 AND status = 'COMPUTED'`,
-    [ledger.id, ts],
-  );
-
+  // NOTE: the ledger is NOT marked REQUESTED here. It moves only once Daraja
+  // has acknowledged the request (sendB2C). Marking it first meant a send that
+  // timed out left the ledger REQUESTED with a payout that never reached
+  // Daraja — and nothing retried it, because the daily close only re-requests
+  // COMPUTED rows and createPayout's fast path returns the existing payout
+  // without re-sending. That payout was stuck until someone noticed.
   await sendB2C(id, ledger, input.scenarioHint, opts);
 
   const payout = await getPayout(db, id);
@@ -239,8 +271,14 @@ async function sendB2C(
     throw err;
   }
 
+  const ackTs = now().toISOString();
   await db.query(
     'UPDATE payouts SET conversation_id = $2, last_request_error = NULL, updated_at = $3 WHERE id = $1',
-    [payoutId, ack.conversationId, now().toISOString()],
+    [payoutId, ack.conversationId, ackTs],
+  );
+  // Daraja has it. Only now is the ledger row REQUESTED.
+  await db.query(
+    `UPDATE payout_ledger SET status = 'REQUESTED', updated_at = $2 WHERE id = $1 AND status = 'COMPUTED'`,
+    [ledger.id, ackTs],
   );
 }

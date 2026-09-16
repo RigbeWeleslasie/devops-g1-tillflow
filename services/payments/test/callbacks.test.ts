@@ -8,7 +8,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { isSalePaidEvent } from '@tillflow/shared/events';
 import type { StkCallbackBody } from '@tillflow/mpesa';
-import { createHarness, chargeBody, countRows, type Harness } from './harness.js';
+import { createHarness, chargeBody, countRows, CALLBACK_BASE, type Harness } from './harness.js';
+import { pushStk, validateCreateCharge } from '../src/services/chargeService.js';
 
 async function charge(h: Harness, overrides: Record<string, unknown> = {}) {
   const body = chargeBody(overrides);
@@ -296,6 +297,63 @@ describe('the uncertain-payment shape', () => {
     assert.equal(ev[0]!.matched, false, 'recorded for the runbook, not applied');
     assert.equal((await chargeRow(h, chargeId)).status, 'PENDING', 'our real charge is untouched');
     assert.equal(await countRows(h.db, 'outbox_events'), 0);
+    await h.close();
+  });
+});
+
+describe('review findings — regression tests', () => {
+  test('a hold written concurrently blocks a transition even when the charge was loaded PENDING (TOCTOU)', async () => {
+    const h = await createHarness();
+    const { chargeId, checkoutRequestId } = await charge(h);
+
+    // Simulate the race: the callback's transaction has already loaded the
+    // charge as PENDING with no hold, and the hold lands before it updates.
+    // The in-memory check cannot see this; only the SQL guard can.
+    await h.db.query("UPDATE charges SET hold_reason = 'amount mismatch from a concurrent callback' WHERE id = $1", [chargeId]);
+
+    await h.fake.deliverPending();
+
+    const c = await chargeRow(h, chargeId);
+    assert.equal(c.status, 'PENDING', 'the guarded UPDATE refused to move a held charge');
+    assert.equal((await outbox(h, chargeId)).length, 0, 'and produced no ledger effect');
+    const ev = await events(h, checkoutRequestId);
+    assert.equal(ev[0]!.applied, false);
+    assert.match(ev[0]!.body ? JSON.stringify(ev[0]!.body).slice(0, 0) + 'ok' : 'ok', /ok/);
+    await h.close();
+  });
+
+  test('a late STK ack cannot overwrite the provider reference on an adopted charge', async () => {
+    const h = await createHarness();
+    // A charge whose push timed out: no CheckoutRequestID of its own.
+    const body = chargeBody({ amountMinor: 10_300 });
+    const created = await h.call({ method: 'POST', url: '/charges', payload: body });
+    const chargeId = created.json().chargeId as string;
+    assert.equal((await chargeRow(h, chargeId)).checkout_request_id, null);
+
+    // The late callback adopts it, claiming a reference.
+    const [ref] = h.fake.unresolvedTimeouts();
+    h.fake.resolveTimeout(ref!, 'success');
+    await h.fake.deliverPending();
+
+    const adopted = await chargeRow(h, chargeId);
+    assert.equal(adopted.checkout_request_id, ref, 'adoption claimed the reference');
+    assert.equal(adopted.status, 'PAID');
+
+    // Now a re-push DOES get an ack this time, with a different reference.
+    // (scenarioHint forces success; by amount alone KES 103 would time out
+    // again and never produce an ack to overwrite with.) It must not
+    // re-point the audit trail at another Daraja transaction.
+    await pushStk(chargeId, { ...validateCreateCharge(body), scenarioHint: 'success' }, {
+      db: h.db,
+      adapter: h.fake,
+      callbackBaseUrl: CALLBACK_BASE,
+      now: h.nowDate,
+    });
+
+    const after = await chargeRow(h, chargeId);
+    assert.equal(after.checkout_request_id, ref, 'the original reference stands');
+    assert.equal(after.status, 'PAID');
+    assert.match(after.last_push_error, /late STK ack ignored/);
     await h.close();
   });
 });

@@ -110,7 +110,7 @@ export class FakePaymentsClient implements PaymentsClient {
 export function tenantWith(opts: {
   tenantId?: string;
   attendantId?: string;
-  msisdn?: string;
+  msisdn?: string | null;
   rateBps?: number;
   saleTotals: number[];
 }): DailyCloseTenant {
@@ -119,7 +119,7 @@ export function tenantWith(opts: {
     attendants: [
       {
         attendantId: opts.attendantId ?? randomUUID(),
-        msisdn: opts.msisdn ?? '254700000000',
+        msisdn: opts.msisdn === null ? null : (opts.msisdn ?? '254700000000'),
         rateBps: opts.rateBps ?? 500,
         sales: opts.saleTotals.map((totalMinor) => ({ saleId: randomUUID(), totalMinor })),
       },

@@ -17,7 +17,8 @@ export interface DailyCloseSale {
 
 export interface DailyCloseAttendant {
   attendantId: string;
-  msisdn: string;
+  /** null when the attendant has no payout destination: unpayable, but still ledgered. */
+  msisdn: string | null;
   rateBps: number;
   /** Individual sale amounts. Per-sale, because the rounding rule is per-sale. */
   sales: DailyCloseSale[];

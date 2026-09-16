@@ -7,9 +7,14 @@
  * paths could disagree and I3 would hold only by luck. So both call this.
  *
  * Must be invoked inside a transaction. The guard is
- * `WHERE status = 'PENDING'`: zero rows updated means someone else already
- * resolved this charge, and the caller must treat that as "not applied"
- * rather than retrying.
+ * `WHERE status = 'PENDING' AND hold_reason IS NULL`: zero rows updated means
+ * someone else already resolved or held this charge, and the caller must
+ * treat that as "not applied" rather than retrying.
+ *
+ * Both halves of that guard must live in the SQL. The `charge.hold_reason`
+ * check below reads a row loaded earlier in the transaction, so on its own it
+ * is a TOCTOU: two concurrent callbacks can both load the charge PENDING and
+ * unheld, one writes the hold, and the other would still flip it to PAID.
  */
 import type { Tx } from '../db.js';
 import type { ChargeRow } from '../types.js';
@@ -40,6 +45,13 @@ export async function applyChargeResolution(
 ): Promise<ApplyResult> {
   // A held charge is never resolved automatically, by either path. Something
   // about it did not add up (threat model A1) and a human owns it.
+  //
+  // This in-memory check is a fast path only. The authoritative guard is
+  // `AND hold_reason IS NULL` in the UPDATEs below: the hold is written by a
+  // SEPARATE statement (callbackService), so two concurrent callbacks can both
+  // read a row that is PENDING with no hold, and the second would otherwise
+  // flip it to PAID after the first set the hold. Checking it in SQL closes
+  // that window; checking it here only saves a round trip.
   if (charge.hold_reason) {
     return { applied: false, transition: null, reason: `charge on hold: ${charge.hold_reason}` };
   }
@@ -52,7 +64,7 @@ export async function applyChargeResolution(
       `UPDATE charges
        SET status = 'PAID', mpesa_receipt = $2, result_code = $3, result_desc = $4, resolved_by = $5,
            paid_at = $6, updated_at = $7
-       WHERE id = $1 AND status = 'PENDING'
+       WHERE id = $1 AND status = 'PENDING' AND hold_reason IS NULL
        RETURNING id`,
       [
         charge.id,
@@ -65,7 +77,7 @@ export async function applyChargeResolution(
       ],
     );
     if (upd.rowCount === 0) {
-      return { applied: false, transition: null, reason: `charge already ${charge.status}` };
+      return { applied: false, transition: null, reason: await whyNotApplied(tx, charge.id, charge.status) };
     }
     await writeSalePaidOutbox(tx, charge, resolution.paidAt ?? now, now);
     return { applied: true, transition: 'PENDING->PAID', reason: null };
@@ -74,12 +86,29 @@ export async function applyChargeResolution(
   const upd = await tx.query<{ id: string }>(
     `UPDATE charges
      SET status = 'FAILED', result_code = $2, result_desc = $3, resolved_by = $4, failed_at = $5, updated_at = $5
-     WHERE id = $1 AND status = 'PENDING'
+     WHERE id = $1 AND status = 'PENDING' AND hold_reason IS NULL
      RETURNING id`,
     [charge.id, resolution.resultCode, resolution.resultDesc, resolution.resolvedBy, ts],
   );
   if (upd.rowCount === 0) {
-    return { applied: false, transition: null, reason: `charge already ${charge.status}` };
+    return { applied: false, transition: null, reason: await whyNotApplied(tx, charge.id, charge.status) };
   }
   return { applied: true, transition: 'PENDING->FAILED', reason: null };
+}
+
+/**
+ * The guarded UPDATE matched no row. Re-read to say WHY — a hold written
+ * concurrently and an already-terminal charge are very different operational
+ * situations, and a log line saying only "already PENDING" would be a lie.
+ */
+async function whyNotApplied(tx: Tx, chargeId: string, statusAtLoad: string): Promise<string> {
+  const res = await tx.query<{ status: string; hold_reason: string | null }>(
+    'SELECT status, hold_reason FROM charges WHERE id = $1',
+    [chargeId],
+  );
+  const row = res.rows[0];
+  if (!row) return `charge ${chargeId} no longer exists`;
+  if (row.hold_reason) return `charge on hold: ${row.hold_reason}`;
+  if (row.status !== 'PENDING') return `charge already ${row.status}`;
+  return `charge was ${statusAtLoad} at load and is ${row.status} now`;
 }

@@ -29,17 +29,17 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 | # | Invariant | Command | Result |
 | - | --------- | ------- | ------ |
 | **I2** | One charge per sale; a retry after a timeout never creates a second | `node --import tsx --test services/payments/test/charges.test.ts` | 22 tests, 0 failing |
-| **I3** | One legal transition and one ledger effect per callback, at any order or repetition | `node --import tsx --test services/payments/test/callbacks.test.ts` | 12 tests, 0 failing |
-| **I4** | One payout per (tenant, attendant, business day); re-running the close is a no-op | `node --import tsx --test services/commission/test/close.test.ts` | 18 tests, 0 failing |
-| **I4** | …and one disbursement per ledger row | `node --import tsx --test services/payments/test/payouts.test.ts` | 18 tests, 0 failing |
+| **I3** | One legal transition and one ledger effect per callback, at any order or repetition | `node --import tsx --test services/payments/test/callbacks.test.ts` | 14 tests, 0 failing |
+| **I4** | One payout per (tenant, attendant, business day); re-running the close is a no-op | `node --import tsx --test services/commission/test/close.test.ts` | 20 tests, 0 failing |
+| **I4** | …and one disbursement per ledger row | `node --import tsx --test services/payments/test/payouts.test.ts` | 20 tests, 0 failing |
 | **I5** | A timeout leaves state `PENDING`, never `FAILED` | `node --import tsx --test services/payments/test/reconcile.test.ts` | 14 tests, 0 failing |
 | — | The invariants as database constraints, independent of any handler | `node --import tsx --test services/payments/test/schema.test.ts` | 10 tests, 0 failing |
 
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments      # 80 tests
-npm test --workspace=@tillflow/commission    # 38 tests
+npm test --workspace=@tillflow/payments      # 84 tests
+npm test --workspace=@tillflow/commission    # 40 tests
 npm test --workspace=@tillflow/mpesa         # 32 tests
 ```
 
@@ -83,7 +83,7 @@ then resolves it two ways and proves a retry cannot create a second charge:
 `services/payments/test/callbacks.test.ts`
 
 ```bash
-node --import tsx --test services/payments/test/callbacks.test.ts   # 12 tests
+node --import tsx --test services/payments/test/callbacks.test.ts   # 14 tests
 ```
 
 - An identical redelivery lands on the **same** `callback_events` row and
@@ -101,7 +101,7 @@ node --import tsx --test services/payments/test/callbacks.test.ts   # 12 tests
 `services/commission/test/close.test.ts`, `worker.test.ts`
 
 ```bash
-node --import tsx --test services/commission/test/close.test.ts     # 18 tests
+node --import tsx --test services/commission/test/close.test.ts     # 20 tests
 node --import tsx --test services/commission/test/worker.test.ts    # 10 tests
 ```
 
@@ -155,6 +155,15 @@ Both adapters **refuse** a fractional-shilling amount rather than rounding it.
 | **A4** Re-trigger the close to double-pay | `UNIQUE(tenant, attendant, day)` + `ledger_id`-idempotent payout | `close.test.ts` |
 | **A5** Change a rate mid-close | Rate snapshotted into the ledger row | `close.test.ts` "snapshots the rate" |
 | **A7** B2C to an attacker's MSISDN | MSISDN comes from the attendant record via POS, never from the request | `internal.ts` contract |
+| — | A B2C success callback with a missing or unparseable `TransactionAmount` | **Not** marked PAID. An amount we cannot verify is not an amount we accept — the weakest forgery no longer gets the least scrutiny | `payouts.test.ts` "unverifiable B2C amount" |
+
+**Known limit, accepted for the capstone.** Callbacks are public by necessity —
+Safaricom cannot send our service token. They are guarded by reference matching
+and an amount cross-check, with **no** IP allow-list and **no** confirming
+`stkQuery` before a PAID transition. A forger who guessed a live
+`CheckoutRequestID` *and* its exact amount would be accepted. Recorded as a
+residual risk in [`threat-model.md`](../../docs/threat-model.md) §5; the fix is
+an edge allow-list plus a confirming query, scheduled for G5.
 
 ## Boundary enforcement — commission never calls Daraja
 

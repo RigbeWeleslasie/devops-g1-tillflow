@@ -123,10 +123,20 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
 
         const ledgerId = randomUUID();
         const ts = now().toISOString();
-        // A zero payout is recorded as SKIPPED rather than omitted: an
-        // attendant who earned nothing (or under one shilling) should still
-        // appear in the day's ledger, so the close is auditable in full.
-        const status = computed.payoutMinor > 0 ? 'COMPUTED' : 'SKIPPED';
+        // SKIPPED rather than omitted, for two different reasons:
+        //   - nothing to send (earned nothing, or under one shilling), or
+        //   - nowhere to send it (no MSISDN on the attendant record).
+        // Either way the attendant appears in the day's ledger with their
+        // real commission recorded, so an owner can see WHY nobody was paid.
+        // Omitting them would make paid sales vanish from the close.
+        const payable = computed.payoutMinor > 0 && attendant.msisdn !== null;
+        const status = payable ? 'COMPUTED' : 'SKIPPED';
+        if (computed.payoutMinor > 0 && attendant.msisdn === null) {
+          logger?.warn(
+            { tenantId: tenant.tenantId, attendantId: attendant.attendantId, amountMinor: computed.amountMinor },
+            'close: attendant earned commission but has no MSISDN — ledgered as SKIPPED, nothing sent',
+          );
+        }
 
         const inserted = await db.query<{ id: string }>(
           `INSERT INTO payout_ledger
@@ -144,7 +154,7 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
             computed.payoutMinor,
             computed.remainderMinor,
             attendant.rateBps,
-            attendant.msisdn,
+            attendant.msisdn ?? '',
             computed.saleCount,
             computed.saleTotalMinor,
             status,

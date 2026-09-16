@@ -47,7 +47,14 @@ export interface DailyCloseSale {
 
 export interface DailyCloseAttendant {
   attendantId: string;
-  msisdn: string;
+  /**
+   * null when the attendant has no payout destination configured. Reported
+   * rather than omitted: their sales still happened and still earned
+   * commission, so Commission records a SKIPPED ledger row. Dropping them
+   * would make paid sales vanish from the close with nothing to show an
+   * owner why nobody was paid.
+   */
+  msisdn: string | null;
   rateBps: number;
   sales: DailyCloseSale[];
 }
@@ -116,12 +123,13 @@ export default async function internalRoutes(app: FastifyInstance, opts: Interna
         for (const [attendantId, attendantSales] of attendantMap) {
           const msisdn = await attendantMsisdn(db, tenantId, attendantId);
           if (!msisdn) {
-            // No payout destination. Reported with rate 0 and no sales so
-            // Commission records a SKIPPED ledger row rather than silently
-            // omitting the attendant — a missing attendant is a fact the
-            // close should surface, not hide.
-            request.log.warn({ tenantId, attendantId }, 'daily-close: attendant has no msisdn');
-            continue;
+            // No payout destination. Still reported, with msisdn null, so
+            // Commission writes a visible SKIPPED row — a missing MSISDN is
+            // a fact the close should surface, not hide.
+            request.log.warn(
+              { tenantId, attendantId, sales: attendantSales.length },
+              'daily-close: attendant has no msisdn; reporting as unpayable',
+            );
           }
           attendants.push({
             attendantId,
@@ -131,6 +139,7 @@ export default async function internalRoutes(app: FastifyInstance, opts: Interna
           });
         }
         if (attendants.length > 0) tenants.push({ tenantId, attendants });
+
       }
 
       const body: DailyCloseResponse = {

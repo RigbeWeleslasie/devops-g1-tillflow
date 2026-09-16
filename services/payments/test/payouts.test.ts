@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { B2C_RESULT, type B2CResultBody } from '@tillflow/mpesa';
 import { createHarness, countRows, type Harness } from './harness.js';
+import { B2C_MAX_ATTEMPTS } from '../src/services/payoutService.js';
 
 const DAY = '2026-09-14';
 
@@ -110,7 +111,7 @@ describe('I4 — one payout per ledger row', () => {
 });
 
 describe('I5 on the payout side', () => {
-  test('a timed-out B2C request leaves the payout PENDING, never FAILED, and nothing re-sends', async () => {
+  test('a timed-out B2C request stays PENDING and COMPUTED, and is re-sent bounded — never stranded, never double-paid', async () => {
     const h = await createHarness();
     const ledgerId = await seedLedger(h, { payoutMinor: 10_300 }); // KES 103: timeout
 
@@ -124,11 +125,27 @@ describe('I5 on the payout side', () => {
     assert.equal(p.failed_at, null);
     assert.match(p.last_request_error, /MpesaTimeoutError/);
 
-    // A retry is safe and must still not re-send: this is how someone gets
-    // paid twice.
+    // The ledger stays COMPUTED. Marking it REQUESTED before Daraja
+    // acknowledged would strand it: the daily close only re-requests COMPUTED
+    // rows, so a REQUESTED row that never reached Daraja would be retried by
+    // nothing at all.
+    assert.equal((await ledgerRow(h, ledgerId)).status, 'COMPUTED');
+
+    // A retry DOES re-send. With no conversation_id the request demonstrably
+    // never reached Daraja, so there is nothing to be idempotent about; the
+    // originator id is our payout id and does not change, so a request Daraja
+    // did receive is recognised as the same one rather than paid twice.
     const retry = await h.call({ method: 'POST', url: '/payouts', payload: { ledgerId } });
-    assert.equal(retry.json().status, 'PENDING');
-    assert.equal((await payoutRow(h, ledgerId)).b2c_attempts, 1);
+    assert.equal(retry.json().status, 'PENDING', 'still never FAILED');
+    assert.equal((await payoutRow(h, ledgerId)).b2c_attempts, 2, 're-sent, not stranded');
+
+    // Bounded: past B2C_MAX_ATTEMPTS we stop and leave it to an operator.
+    // Hammering a provider we cannot hear makes things worse, not better.
+    for (let i = 0; i < 5; i++) {
+      await h.call({ method: 'POST', url: '/payouts', payload: { ledgerId } });
+    }
+    assert.equal((await payoutRow(h, ledgerId)).b2c_attempts, B2C_MAX_ATTEMPTS);
+    assert.equal(await countRows(h.db, 'payouts'), 1, 'still exactly one payout row');
     await h.close();
   });
 
@@ -307,6 +324,41 @@ describe('validation and auth', () => {
     assert.equal((await h.call({ method: 'GET', url: `/payouts/${id}` })).json().ledgerId, ledgerId);
     assert.equal((await h.call({ method: 'GET', url: `/payouts/by-ledger/${ledgerId}` })).json().payoutId, id);
     assert.equal((await h.call({ method: 'GET', url: `/payouts/${randomUUID()}` })).statusCode, 404);
+    await h.close();
+  });
+});
+
+describe('review finding — an unverifiable B2C amount is not a paid payout', () => {
+  test('a success result with NO TransactionAmount does not mark the payout PAID', async () => {
+    const h = await createHarness();
+    const ledgerId = await seedLedger(h);
+    await h.call({ method: 'POST', url: '/payouts', payload: { ledgerId } });
+
+    const queued = h.fake.peekPending()[0]!;
+    const stripped = structuredClone(queued.body) as B2CResultBody;
+    // The weakest possible forgery: just omit the field. This used to skip
+    // the mismatch check entirely and mark the payout PAID.
+    stripped.Result.ResultParameters!.ResultParameter =
+      stripped.Result.ResultParameters!.ResultParameter.filter((p) => p.Key !== 'TransactionAmount');
+
+    const res = await h.app.inject({ method: 'POST', url: '/callbacks/b2c', payload: stripped });
+    assert.equal(res.statusCode, 200);
+    assert.equal((await payoutRow(h, ledgerId)).status, 'PENDING', 'an amount we cannot verify is not accepted');
+    assert.equal((await ledgerRow(h, ledgerId)).status, 'REQUESTED');
+    await h.close();
+  });
+
+  test('a success result with an unparseable TransactionAmount is treated the same way', async () => {
+    const h = await createHarness();
+    const ledgerId = await seedLedger(h);
+    await h.call({ method: 'POST', url: '/payouts', payload: { ledgerId } });
+
+    const queued = h.fake.peekPending()[0]!;
+    const garbled = structuredClone(queued.body) as B2CResultBody;
+    garbled.Result.ResultParameters!.ResultParameter.find((p) => p.Key === 'TransactionAmount')!.Value = 'lots';
+
+    await h.app.inject({ method: 'POST', url: '/callbacks/b2c', payload: garbled });
+    assert.equal((await payoutRow(h, ledgerId)).status, 'PENDING');
     await h.close();
   });
 });

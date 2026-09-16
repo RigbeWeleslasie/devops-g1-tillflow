@@ -226,9 +226,36 @@ export async function pushStk(chargeId: string, input: CreateChargeInput, opts: 
     throw err;
   }
 
-  await db.query(
+  // Guarded exactly as adoption is (callbackService.findAdoptableCharge):
+  // only claim the provider reference if this charge does not already have
+  // one and is still PENDING.
+  //
+  // Without the guard, a late ack — or an operator re-push — could rewrite
+  // checkout_request_id on a charge that has since been adopted by a callback
+  // or already resolved. That would silently re-point the audit trail at a
+  // different Daraja transaction and break reconciliation linkage for a
+  // charge whose money has already moved.
+  const claimed = await db.query<{ id: string }>(
     `UPDATE charges SET merchant_request_id = $2, checkout_request_id = $3, last_push_error = NULL, updated_at = $4
-     WHERE id = $1`,
+     WHERE id = $1 AND status = 'PENDING' AND checkout_request_id IS NULL
+     RETURNING id`,
     [chargeId, ack.merchantRequestId, ack.checkoutRequestId, now().toISOString()],
   );
+
+  if (claimed.rowCount === 0) {
+    // The ack arrived too late to be useful. Record it rather than discard
+    // it: two provider references for one charge is exactly the kind of
+    // thing an operator needs to see, and stkQuery can still be run against
+    // the id we are NOT storing.
+    await db.query(
+      `UPDATE charges
+       SET last_push_error = $2, updated_at = $3
+       WHERE id = $1`,
+      [
+        chargeId,
+        `late STK ack ignored: charge already resolved or already holds a CheckoutRequestID (this ack was ${ack.checkoutRequestId})`,
+        now().toISOString(),
+      ],
+    );
+  }
 }

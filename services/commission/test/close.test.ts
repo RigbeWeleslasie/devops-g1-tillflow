@@ -324,3 +324,45 @@ describe('the close run record', () => {
     }
   });
 });
+
+describe('review finding — an attendant with no MSISDN is ledgered, not dropped', () => {
+  test('their sales still appear, with a SKIPPED row and nothing sent', async () => {
+    const h = harness([tenantWith({ saleTotals: [100_000], msisdn: null })]);
+    const result = await h.close();
+
+    assert.equal(result.attendantsProcessed, 1, 'the attendant was processed, not skipped over');
+    assert.equal(result.ledgerRowsCreated, 1, 'and their day is on the ledger');
+
+    const rows = await ledger(h.db);
+    assert.equal(rows[0]!.status, 'SKIPPED', 'unpayable, but visible');
+    assert.equal(rows[0]!.amount_minor, 5_000, 'the commission they earned is still recorded');
+    assert.equal(rows[0]!.sale_count, 1, 'and the sales behind it are not lost');
+    assert.equal(h.payments.calls.length, 0, 'nothing was sent — there is nowhere to send it');
+    await h.close;
+  });
+
+  test('a re-run once the MSISDN is fixed does NOT retroactively pay the old day', async () => {
+    const h = harness([tenantWith({ saleTotals: [100_000], msisdn: null })]);
+    await h.close();
+    const row = (await ledger(h.db))[0]!;
+
+    // The owner adds the phone number and the close is re-run.
+    h.pos.setDay(DAY, [
+      tenantWith({
+        tenantId: row.tenant_id,
+        attendantId: row.attendant_id,
+        saleTotals: [100_000],
+        msisdn: '254733333333',
+      }),
+    ]);
+    const second = await h.close();
+
+    // I4 still governs: the row for that (tenant, attendant, day) exists, so
+    // nothing is recomputed. Paying it now is an operator decision with a
+    // record, not something a re-run does silently.
+    assert.equal(second.ledgerRowsCreated, 0);
+    assert.equal((await ledger(h.db))[0]!.status, 'SKIPPED', 'still SKIPPED — the snapshot stands');
+    assert.equal(h.payments.disbursements.size, 0);
+    await h.close;
+  });
+});
