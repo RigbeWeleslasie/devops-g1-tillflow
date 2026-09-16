@@ -1,6 +1,7 @@
 /**
  * Client for the one contract POS depends on from Payments:
- *   POST /charges { saleId, amountMinor, tenantTill } -> idempotent on saleId.
+ *   POST /charges { saleId, tenantId, amountMinor, tenantTill, customerMsisdn }
+ *     -> idempotent on saleId.
  *   A timeout leaves the charge PENDING -- never FAILED.
  *
  * That "never FAILED on timeout" rule is enforced HERE, not just on the
@@ -13,8 +14,11 @@
 
 export interface CreateChargeRequest {
   saleId: string;
+  tenantId: string;
   amountMinor: number;
   tenantTill: string;
+  /** Customer's phone for the STK Push. Kenyan MSISDN: 2547XXXXXXXX | 2541XXXXXXXX. */
+  customerMsisdn: string;
 }
 
 export type CreateChargeResult =
@@ -27,6 +31,8 @@ export interface PaymentsClient {
 
 export interface HttpPaymentsClientOptions {
   baseUrl: string;
+  /** Shared service token; Payments rejects /charges without it. */
+  serviceToken: string;
   /** Milliseconds before the call is treated as `unknown`, not failed. */
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -34,11 +40,13 @@ export interface HttpPaymentsClientOptions {
 
 export class HttpPaymentsClient implements PaymentsClient {
   private readonly baseUrl: string;
+  private readonly serviceToken: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: HttpPaymentsClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
+    this.serviceToken = opts.serviceToken;
     this.timeoutMs = opts.timeoutMs ?? 5000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -49,7 +57,10 @@ export class HttpPaymentsClient implements PaymentsClient {
     try {
       const res = await this.fetchImpl(`${this.baseUrl}/charges`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-service-token': this.serviceToken,
+        },
         body: JSON.stringify(req),
         signal: controller.signal,
       });

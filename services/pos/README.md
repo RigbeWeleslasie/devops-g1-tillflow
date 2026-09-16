@@ -25,10 +25,10 @@ consumer** (`src/workers/salePaidConsumer.ts`), never by an HTTP handler — see
 | `GET /tenants/:id` | owner, own tenant | 404 on any other tenant |
 | `POST /tenants/:id/attendants` | owner, own tenant | sets the payout MSISDN — owner-managed, never attendant-supplied (threat-model.md A7) |
 | `POST /tenants/:id/rates` | owner, own tenant | basis points, `attendantId` omitted = tenant default |
-| `POST /tenants/:id/products` | owner, own tenant | |
+| `POST /tenants/:id/products` | owner, own tenant | `unitPriceMinor` must be whole shillings (`% 100 == 0`) — M-Pesa cannot carry cents |
 | `POST /sales` | any role, own tenant | **requires `Idempotency-Key`**; server recomputes the total from the product catalog, never trusts a client-sent price |
 | `GET /sales/:id` | any role, own tenant | cross-tenant → 404, not 403 |
-| `POST /sales/:id/pay` | any role, own tenant | calls Payments `POST /charges`; a timeout leaves the sale `UNPAID` with no `chargeId`, never a fabricated `FAILED` |
+| `POST /sales/:id/pay` | any role, own tenant | body `{ customerMsisdn }`; calls Payments `POST /charges` with `tenantId` + phone; a timeout leaves the sale `UNPAID` with no `chargeId`, never a fabricated `FAILED` |
 | `GET /health` `GET /ready` `GET /version` | none | golden path, `@tillflow/shared/health` |
 | `POST /dev/tokens` | none, non-production only | mints a JWT for a known `(tenantId, externalAuthId)` — see "Auth scope" below |
 
@@ -58,7 +58,7 @@ cd services/pos
 npm install            # from the repo root; this is an npm workspace
 npm run build
 npm test               # 16 tests, pg-mem-backed — no Postgres/Docker needed
-npm run dev             # requires DATABASE_URL, JWT_SECRET, PAYMENTS_BASE_URL
+npm run dev             # requires DATABASE_URL, JWT_SECRET, PAYMENTS_BASE_URL, SERVICE_TOKEN
 ```
 
 ### Running migrations against a real Postgres

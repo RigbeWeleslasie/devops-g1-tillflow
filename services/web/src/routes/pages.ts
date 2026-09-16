@@ -158,11 +158,15 @@ export default async function pagesRoutes(app: FastifyInstance, opts: PagesRoute
     }
   });
 
-  app.post<{ Params: { id: string } }>('/sell/:id/pay', async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: { customerMsisdn?: string } }>('/sell/:id/pay', async (request, reply) => {
     const auth = requireAuth(request);
     if (!auth) return reply.redirect('/login');
+    const customerMsisdn = request.body?.customerMsisdn?.trim();
+    if (!customerMsisdn) {
+      return reply.code(400).type('text/html').send(errorPage('Customer MSISDN is required for STK Push.', 400));
+    }
     const client = clientFor(posBaseUrl, auth.token);
-    await client.paySale(request.params.id);
+    await client.paySale(request.params.id, customerMsisdn);
     return reply.redirect(`/sell/${request.params.id}`);
   });
 }

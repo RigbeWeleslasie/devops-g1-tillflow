@@ -14,6 +14,14 @@ import { toMinorUnits } from '@tillflow/shared/money';
 import type { Attendant, Product, Tenant, User } from '../types.js';
 
 export class NotFoundError extends Error {}
+export class ValidationError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'ValidationError';
+    this.code = code;
+  }
+}
 
 export interface BootstrapTenantInput {
   name: string;
@@ -120,6 +128,12 @@ export async function createProduct(
   input: CreateProductInput,
 ): Promise<Product> {
   const unitPriceMinor = toMinorUnits(input.unitPriceMinor);
+  if (unitPriceMinor % 100 !== 0) {
+    throw new ValidationError(
+      'price_not_whole_shillings',
+      `M-Pesa cannot carry cents; unitPriceMinor must be a multiple of 100 (got ${unitPriceMinor})`,
+    );
+  }
   const id = randomUUID();
   await db.query(
     'INSERT INTO products (id, tenant_id, name, unit_price_minor, active) VALUES ($1, $2, $3, $4, true)',

@@ -23,7 +23,12 @@ async function main(): Promise<void> {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db, { productPriceMinor: 25000 }); // KES 250.00
   const paymentsClient = new FakePaymentsClient();
-  const app = await buildApp({ db, paymentsClient, jwtSecret: 'demo-secret', logger: false });
+  const app = await buildApp({
+    db,
+    paymentsClient,
+    jwtSecret: 'demo-secret',
+    logger: false,
+  });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });
 
   console.log('Tenant:', tenant.name, tenant.id);
@@ -62,11 +67,12 @@ async function main(): Promise<void> {
   });
   console.log('-> status', conflictRes.statusCode, JSON.stringify(conflictRes.json()));
 
-  step(4, 'POST /sales/{id}/pay -> POS calls Payments POST /charges');
+  step(4, 'POST /sales/{id}/pay { customerMsisdn } -> POS calls Payments POST /charges');
   const payRes = await app.inject({
     method: 'POST',
     url: `/sales/${sale.id}/pay`,
     headers: { authorization: `Bearer ${token}` },
+    payload: { customerMsisdn: '254708374149' },
   });
   console.log('->', payRes.statusCode, JSON.stringify(payRes.json(), null, 2));
   console.log('   Payments client saw:', JSON.stringify(paymentsClient.calls[0]));
