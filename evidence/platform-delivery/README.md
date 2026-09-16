@@ -185,6 +185,41 @@ The fixtures are real `describe-image-scan-findings` shapes
 (`scan-gate-fixtures/`), and `scan-gate-test.sh` replays the gate's own jq. A
 change that breaks the filter now fails here rather than in a deploy.
 
+## 5d · Service-to-service auth token
+
+`devops-g1/service-token` guards the routes reachable through API Gateway that
+should only ever be called by another service -- POS `/internal/daily-close`,
+Payments `/charges`, `/payouts`, `/admin/*` (threat-model.md §3.2). Requested by
+Payments in [`../payments-integrity/deployment-contract.md`](../payments-integrity/deployment-contract.md).
+
+```bash
+# exists, KMS-encrypted, and the right shape -- without printing the value
+aws secretsmanager describe-secret --secret-id devops-g1/service-token \
+  --query '{Name:Name,KMS:KmsKeyId}'
+aws secretsmanager get-secret-value --secret-id devops-g1/service-token \
+  --query SecretString --output text |
+  jq -r '"length: \(.token|length)  alphanumeric: \(.token|test("^[A-Za-z0-9]+$"))"'
+# length: 48  alphanumeric: true
+
+# who can read it
+for s in pos payments commission web; do
+  aws iam get-role-policy --role-name devops-g1-$s-exec \
+    --policy-name devops-g1-$s-exec-secrets \
+    --query 'PolicyDocument.Statement[?Sid==`ReadServiceToken`].Resource' --output text
+done
+# pos, payments, commission: granted -- web: none
+```
+
+Terraform generates this one rather than taking it out-of-band, because all
+three services must present the *same* value: a per-service secret would
+guarantee drift. `web` is excluded deliberately -- it is a browser-facing shell
+and never makes an authenticated service-to-service call.
+
+The grant needs a trailing `-*`. Secrets Manager appends a random suffix to
+every ARN (`...:secret:devops-g1/service-token-NPEUKn`), so an exact-match
+resource matches nothing, and the failure surfaces as a task that will not start
+with `AccessDenied` rather than anything naming the cause.
+
 ## 6 · Account guard
 
 The workstation's `default` profile points at an unrelated account. The provider
