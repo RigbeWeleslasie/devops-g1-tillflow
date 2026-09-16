@@ -239,7 +239,9 @@ resource "aws_s3_bucket_versioning" "logs" {
 # SSE-S3, not a CMK: the ALB log-delivery principal cannot write through a
 # customer-managed key without key-policy work ADR 0004 judged not worth it for
 # access logs. This is the ADR's documented choice, not an oversight.
-# trivy:ignore:AWS-0132 accepted: ALB log delivery constraint per ADR 0004. Owner: meron. Expiry: G5.
+# Accepted risk: ALB log delivery cannot use a CMK, per ADR 0004.
+# Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
   bucket = aws_s3_bucket.logs.id
 

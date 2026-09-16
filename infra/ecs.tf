@@ -137,6 +137,17 @@ resource "aws_ssm_parameter" "adot_config" {
       }
     }
 
+    # The container health check probes `/healthcheck`, which is served by this
+    # extension on :13133. Without it declared AND listed in service.extensions
+    # below, the endpoint does not exist, the probe is refused for the life of
+    # every task, and the sidecar reports UNHEALTHY forever -- which is exactly
+    # the "sidecar boot" signal the G1 gate asks to see green.
+    extensions = {
+      health_check = {
+        endpoint = "0.0.0.0:13133"
+      }
+    }
+
     processors = {
       # Required before the awsemf/awsxray exporters: enriches spans with ECS
       # metadata (task arn, cluster) so traces are attributable to a task.
@@ -168,6 +179,9 @@ resource "aws_ssm_parameter" "adot_config" {
     }
 
     service = {
+      # Declaring an extension does not start it; it must be listed here too.
+      extensions = ["health_check"]
+
       pipelines = {
         traces = {
           receivers  = ["otlp"]
@@ -257,7 +271,8 @@ resource "aws_vpc_security_group_ingress_rule" "service_from_alb" {
 # range, so an egress CIDR narrower than 0.0.0.0/0 cannot be written without
 # breaking payments. Port 443 only, and the VPC endpoints keep ECR/logs/secrets
 # traffic off this path entirely.
-# trivy:ignore:AWS-0104 accepted: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
+# Accepted risk: no stable CIDR for Daraja. Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0104
 resource "aws_vpc_security_group_egress_rule" "service_https" {
   for_each = toset(local.services)
 
@@ -285,6 +300,53 @@ locals {
   # 0 for services with no image yet. `bootstrap_image` lets the golden-path
   # service come up before any application code exists.
   adot_image = "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.3"
+
+  # Which services have a real image, and which are still un-deployed.
+  #
+  # A service with no image cannot be made healthy by picking a cleverer
+  # placeholder: /health and /ready are OUR contract, and a stock public image
+  # does not serve them (busybox has no HTTP at all; nginx 404s on both --
+  # measured, not assumed). So the honest model is that a service is either
+  # deployed or it is scaled to zero, and `terraform apply` on a fresh account
+  # brings up exactly the services whose image has been supplied.
+  #
+  # The default must NOT be a digest inside our own ECR: that repository is
+  # created by this same Terraform, so on a fresh apply -- or after the G5
+  # destroy/rebuild -- the digest does not exist and every task fails with
+  # CannotPullContainerError.
+  # Empty unless explicitly supplied. Nothing about the current release is
+  # committed or inferred.
+  #
+  # Discovering the newest image in ECR was tried and is wrong: PR checks build
+  # every service, so "an image exists" is not "this service is deployed" -- it
+  # would have scaled up web, payments and commission from images that were only
+  # ever built for a scan.
+  #
+  # The release is passed in by whoever performs it (deploy.sh and deploy.yml
+  # both do), which keeps the committed defaults rebuildable: on a fresh account
+  # every service resolves to "" and stays at 0 until something deploys it.
+  service_image = {
+    for s in local.services : s => trimspace(lookup(var.service_images, s, ""))
+  }
+
+  # A service runs only when it has an image, so a fresh apply never starts a
+  # task that can only crash-loop against a placeholder it cannot serve from.
+  #
+  # This is also why `desired_count` is back in `ignore_changes` below: CI
+  # applies with `service_images={}` (there is no committed digest -- see above),
+  # which would otherwise compute 0 and scale a running service down on every
+  # deploy, before the release job built it back up. Terraform sets the initial
+  # count; after that ECS owns it, and the pipeline is what scales a service up
+  # by deploying to it.
+  service_scale = {
+    for s in local.services : s => (
+      local.service_image[s] != "" ? lookup(var.service_desired_count, s, 0) : 0
+    )
+  }
+
+  # Placeholder for the task definition only -- a task definition must name an
+  # image even when the service is scaled to 0 and will never pull it.
+  placeholder_image = "public.ecr.aws/docker/library/busybox:1.36"
 }
 
 resource "aws_ecs_task_definition" "service" {
@@ -307,7 +369,7 @@ resource "aws_ecs_task_definition" "service" {
     # --- application -------------------------------------------------------
     {
       name  = each.key
-      image = var.service_images[each.key]
+      image = local.service_image[each.key] != "" ? local.service_image[each.key] : local.placeholder_image
 
       essential = true
 
@@ -428,7 +490,10 @@ resource "aws_ecs_service" "service" {
   launch_type     = "FARGATE"
 
   # 0 until the pipeline has pushed a real image for this service.
-  desired_count = var.service_desired_count[each.key]
+  # local.service_scale, not the raw variable: a service with no image stays at
+  # 0 however the variable is set, so a fresh apply can never start tasks that
+  # would only crash-loop against a placeholder they cannot serve from.
+  desired_count = local.service_scale[each.key]
 
   # Rolling deploy with circuit breaker: a failing deployment rolls back to the
   # last healthy task set automatically. This is the "broken release" rollback
@@ -473,7 +538,7 @@ resource "aws_ecs_service" "service" {
   # smoke gets a 503 from an empty target group, and a perfectly good deploy
   # rolls back. Scale is a declarative property, so it belongs here.
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes = [task_definition, desired_count]
   }
 
   tags = {

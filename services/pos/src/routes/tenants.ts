@@ -13,6 +13,7 @@ import {
   createProduct,
   getTenant,
   setCommissionRate,
+  ValidationError,
 } from '../services/tenantService.js';
 
 export interface TenantRoutesOptions {
@@ -85,8 +86,15 @@ export default async function tenantRoutes(app: FastifyInstance, opts: TenantRou
     '/tenants/:tenantId/products',
     { preHandler: [app.requireAuth, scoped, app.requireRole('owner')] },
     async (request, reply) => {
-      const product = await createProduct(db, request.params.tenantId, request.body);
-      return reply.code(201).send(product);
+      try {
+        const product = await createProduct(db, request.params.tenantId, request.body);
+        return reply.code(201).send(product);
+      } catch (err) {
+        if (err instanceof ValidationError) {
+          return reply.code(400).send({ error: err.code, message: err.message });
+        }
+        throw err;
+      }
     },
   );
 }

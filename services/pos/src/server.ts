@@ -14,7 +14,7 @@ const paymentsBaseUrl = requireEnv('PAYMENTS_BASE_URL');
 const serviceToken = requireEnv('SERVICE_TOKEN');
 
 const db = createPool(databaseUrl);
-const paymentsClient = new HttpPaymentsClient({ baseUrl: paymentsBaseUrl });
+const paymentsClient = new HttpPaymentsClient({ baseUrl: paymentsBaseUrl, serviceToken });
 
 const app = await buildApp({ db, paymentsClient, jwtSecret, serviceToken });
 

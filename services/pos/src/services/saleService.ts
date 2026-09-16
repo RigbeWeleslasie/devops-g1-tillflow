@@ -18,6 +18,17 @@ import type { SalePaidEvent } from '@tillflow/shared/events';
 export class NotFoundError extends Error {}
 export class IdempotencyConflictError extends Error {}
 export class InvalidStateError extends Error {}
+export class ValidationError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'ValidationError';
+    this.code = code;
+  }
+}
+
+/** Matches Payments' validateCreateCharge — STK Push needs a real Kenyan MSISDN. */
+const CUSTOMER_MSISDN_RE = /^2547\d{8}$|^2541\d{8}$/;
 
 export interface CreateSaleItemInput {
   productId: string;
@@ -269,6 +280,7 @@ export async function paySale(
   paymentsClient: PaymentsClient,
   tenantId: string,
   saleId: string,
+  customerMsisdn: string,
 ): Promise<PaySaleResult> {
   const sale = await getSale(db, tenantId, saleId);
   if (!sale) {
@@ -291,6 +303,13 @@ export async function paySale(
     return { sale, charge: { status: 'PENDING', chargeId: sale.chargeId } };
   }
 
+  if (!CUSTOMER_MSISDN_RE.test(customerMsisdn)) {
+    throw new ValidationError(
+      'invalid_customer_msisdn',
+      'customerMsisdn must be a Kenyan MSISDN like 2547XXXXXXXX',
+    );
+  }
+
   const tenantResult = await db.query<{ till_number: string }>(
     'SELECT till_number FROM tenants WHERE id = $1',
     [tenantId],
@@ -302,8 +321,10 @@ export async function paySale(
 
   const result = await paymentsClient.createCharge({
     saleId: sale.id,
+    tenantId,
     amountMinor: sale.totalMinor,
     tenantTill: tillNumber,
+    customerMsisdn,
   });
 
   if (result.outcome === 'unknown') {

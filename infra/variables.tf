@@ -112,16 +112,27 @@ variable "task_memory" {
 
 variable "service_images" {
   description = <<-EOT
-    Image per service. Digest-pinned by the pipeline on every deploy; the default
-    is the shared golden-path image so the platform can be proven before the
-    product services exist. Never a `latest` tag.
+    Image per service. Empty by default, which means "use the public bootstrap
+    image" (see local.service_image in ecs.tf); the pipeline overrides with a
+    digest-pinned image from our own ECR on every deploy.
+
+    The default must NOT reference our own ECR. A digest inside a repository
+    this same Terraform creates does not exist on a fresh apply -- or after the
+    destroy/rebuild G5 grades -- and every service then fails with
+    CannotPullContainerError. The ECR lifecycle policy (keep 20, tagStatus any)
+    would expire it eventually even on this account.
+
+    It must also be SELF-HEALTHY: ECS and the ALB probe /health and /ready, so a
+    placeholder that serves neither (busybox) crash-loops until a pipeline run.
+
+    Never a `latest` tag anywhere.
   EOT
   type        = map(string)
   default = {
-    web        = "public.ecr.aws/docker/library/busybox:1.36"
-    pos        = "public.ecr.aws/docker/library/busybox:1.36"
-    payments   = "public.ecr.aws/docker/library/busybox:1.36"
-    commission = "public.ecr.aws/docker/library/busybox:1.36"
+    web        = ""
+    pos        = ""
+    payments   = ""
+    commission = ""
   }
 }
 
@@ -133,16 +144,17 @@ variable "service_desired_count" {
     AZs -- one task cannot demonstrate the AZ-failure drill, and a rolling deploy
     with minimum-healthy-percent 100 needs somewhere to put the new task.
 
-    Services whose image is still the placeholder stay at 0: a task crash-looping
-    against busybox would fail the ALB health check and make every deploy look
-    broken. Raise a service to 2 in the same PR that gives it a real image.
+    Only `pos` runs at G1: it is the golden path, and the other services get
+    their own code in G2. They share the same self-healthy image, so raising
+    them is a one-line change -- kept at 0 for now purely to avoid paying for
+    six idle Fargate tasks on a shared cohort account.
   EOT
   type        = map(number)
   default = {
-    web        = 0 # placeholder image until G2
-    pos        = 2 # golden path: proven end to end
-    payments   = 0 # placeholder image until G2
-    commission = 0 # worker, no ingress; scaled up with its first real image
+    web        = 0 # own code lands in G2
+    pos        = 2 # golden path: proven end to end, one task per AZ
+    payments   = 0 # own code lands in G2
+    commission = 0 # worker, no ingress; scaled up with its first real workload
   }
 }
 

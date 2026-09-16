@@ -98,6 +98,7 @@ test('sale creation -> pay flow renders the sale status page', async (t) => {
     method: 'POST',
     url: `${createRes.headers.location}/pay`,
     headers: { cookie },
+    payload: { customerMsisdn: '254708374149' },
   });
   assert.equal(payRes.statusCode, 302);
 });

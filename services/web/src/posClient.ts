@@ -34,8 +34,7 @@ export class PosClient {
   ): Promise<T> {
     // Only set content-type when there's actually a body: Fastify's default
     // JSON parser rejects a request that declares application/json but has
-    // an empty body (400) -- exactly what a bodyless POST like paySale()
-    // sends, since it has nothing to say beyond the URL.
+    // an empty body (400).
     const headers: Record<string, string> = { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...extraHeaders };
     if (this.token) headers['authorization'] = `Bearer ${this.token}`;
     const res = await fetch(`${this.baseUrl}${path}`, {
@@ -103,10 +102,11 @@ export class PosClient {
     );
   }
 
-  paySale(saleId: string) {
+  paySale(saleId: string, customerMsisdn: string) {
     return this.request<{ sale: unknown; charge: { status: string; chargeId: string | null } }>(
       'POST',
       `/sales/${saleId}/pay`,
+      { customerMsisdn },
     );
   }
 }

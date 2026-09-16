@@ -16,6 +16,7 @@ import {
   IdempotencyConflictError,
   InvalidStateError,
   NotFoundError,
+  ValidationError,
 } from '../services/saleService.js';
 
 export interface SalesRoutesOptions {
@@ -67,13 +68,19 @@ export default async function salesRoutes(app: FastifyInstance, opts: SalesRoute
     },
   );
 
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Body: { customerMsisdn?: string } }>(
     '/sales/:id/pay',
     { preHandler: [app.requireAuth] },
     async (request, reply) => {
       const tenantId = request.principal!.tenantId;
+      const customerMsisdn = request.body?.customerMsisdn;
+      if (!customerMsisdn || typeof customerMsisdn !== 'string') {
+        return reply
+          .code(400)
+          .send({ error: 'missing_customer_msisdn', message: 'customerMsisdn is required' });
+      }
       try {
-        const result = await paySale(db, paymentsClient, tenantId, request.params.id);
+        const result = await paySale(db, paymentsClient, tenantId, request.params.id, customerMsisdn);
         return reply.code(202).send(result);
       } catch (err) {
         if (err instanceof NotFoundError) {
@@ -81,6 +88,9 @@ export default async function salesRoutes(app: FastifyInstance, opts: SalesRoute
         }
         if (err instanceof InvalidStateError) {
           return reply.code(409).send({ error: 'invalid_state', message: err.message });
+        }
+        if (err instanceof ValidationError) {
+          return reply.code(400).send({ error: err.code, message: err.message });
         }
         throw err;
       }
