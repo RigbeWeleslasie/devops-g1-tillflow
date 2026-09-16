@@ -16,7 +16,7 @@ const serviceToken = requireEnv('SERVICE_TOKEN');
 const db = createPool(databaseUrl);
 const paymentsClient = new HttpPaymentsClient({ baseUrl: paymentsBaseUrl, serviceToken });
 
-const app = await buildApp({ db, paymentsClient, jwtSecret });
+const app = await buildApp({ db, paymentsClient, jwtSecret, serviceToken });
 
 app.addHook('onClose', async () => {
   await db.end();

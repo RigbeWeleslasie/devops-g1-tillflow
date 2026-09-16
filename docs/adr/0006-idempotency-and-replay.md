@@ -77,3 +77,59 @@ Invariants that must hold no matter what:
   replayed callback is visible as "second span, zero writes".
 - Tests: property/invariant suite replays and reorders callbacks and re-runs closes;
   asserts I1–I5.
+
+---
+
+## Amendment — 2026-09-15 (G2 implementation)
+
+Three things the original decision did not anticipate, all discovered while
+making I3 and I5 actually hold. None changes an invariant; each closes a gap
+the first draft left open.
+
+### 1. Re-association after a timed-out push (I5)
+
+The draft said a timed-out STK push stays `PENDING` and the reconciler
+resolves it by `stkQuery`. That works only when we HAVE a
+`CheckoutRequestID` — and a push that times out never returns one. Daraja
+offers no way to query by our own reference, so such a charge is
+unqueryable, and any callback that later arrives matches nothing.
+
+**Decision:** a success callback whose reference is unknown may ADOPT a
+charge whose push timed out, if and only if exactly one candidate matches on
+MSISDN, amount, `status='PENDING'`, `checkout_request_id IS NULL`, and
+creation within 30 minutes. Two candidates ⇒ adopt neither and leave both
+for a human. Crediting the wrong sale is worse than staying stuck.
+
+### 2. The `hold` state (threat model A1)
+
+The draft had two outcomes for a callback: apply, or ignore as a duplicate.
+It had nothing to say about a callback that is well-formed, matches a charge
+we issued, and reports an amount we never charged.
+
+**Decision:** such a charge gets `hold_reason` set and NO transition. While
+held, no automatic path may resolve it — not the reconciler, and not the
+genuine callback that may follow. `POST /admin/charges/:id/release` clears
+it after a human decides. This is "never guess" made concrete: when two
+callbacks disagree about money, picking a winner automatically is guessing.
+
+### 3. `payout_minor` and `remainder_minor` (money)
+
+The draft's rounding rule produces an exact commission in minor units. M-Pesa
+B2C pays whole shillings, so an exact commission of KES 5.05 cannot be sent.
+
+**Decision:** `payout_ledger` records all three numbers — `amount_minor`
+(exact), `payout_minor` (floored to a shilling, what B2C sends), and
+`remainder_minor` (the cents that stay with the tenant). The truncation is
+auditable rather than silent, and `payout + remainder == amount` is asserted
+by test. Consequence: **product prices must be whole shillings**
+(`unit_price_minor % 100 == 0`), since both adapters refuse a
+fractional-shilling amount rather than rounding it.
+
+### Schema additions beyond the draft
+
+`charges.hold_reason`, `charges.reconcile_attempts`,
+`charges.last_reconciled_at`, `charges.resolved_by`, `outbox_events`
+(the transactional outbox that makes "one ledger effect" a database
+constraint rather than a code path), `payout_ledger.payout_minor` /
+`remainder_minor`, and `close_runs` (so a replay is provable from the
+database alone).

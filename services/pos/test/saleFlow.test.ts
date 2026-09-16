@@ -15,12 +15,13 @@ import { FakeEventSource } from '../src/workers/fakeEventSource.js';
 import { runOnce } from '../src/workers/salePaidConsumer.js';
 import type { SalePaidEvent } from '@tillflow/shared/events';
 
+const TEST_SERVICE_TOKEN = 'test-service-token-0123456789abcdef';
 
 test('e2e: sale is created UNPAID, pay initiates a charge, sale.paid moves it to PAID', async () => {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db, { productPriceMinor: 25_000 });
   const paymentsClient = new FakePaymentsClient();
-  const app = await buildApp({ db, paymentsClient, jwtSecret: 'test-secret', logger: false });
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN, db, paymentsClient, jwtSecret: 'test-secret', logger: false });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });
 
   // 1. Create the sale.
@@ -98,7 +99,7 @@ test('e2e: pay refuses a sale that is already PAID', async () => {
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db);
   const paymentsClient = new FakePaymentsClient();
-  const app = await buildApp({ db, paymentsClient, jwtSecret: 'test-secret', logger: false });
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN, db, paymentsClient, jwtSecret: 'test-secret', logger: false });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });
 
   const createRes = await app.inject({
@@ -140,7 +141,7 @@ test('e2e: a timed-out charge attempt leaves the sale UNPAID with no chargeId, n
   const { db } = createTestDb();
   const { tenant, owner, attendant, product } = await seedTenant(db);
   const paymentsClient = new FakePaymentsClient('unknown'); // simulates the HTTP call to Payments timing out
-  const app = await buildApp({ db, paymentsClient, jwtSecret: 'test-secret', logger: false });
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN, db, paymentsClient, jwtSecret: 'test-secret', logger: false });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });
 
   const createRes = await app.inject({
@@ -180,6 +181,7 @@ test('e2e: pay requires customerMsisdn', async () => {
     db,
     paymentsClient,
     jwtSecret: 'test-secret',
+    serviceToken: TEST_SERVICE_TOKEN,
     logger: false,
   });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });
@@ -222,6 +224,7 @@ test('e2e: a product priced in cents is refused at create', async () => {
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',
+    serviceToken: TEST_SERVICE_TOKEN,
     logger: false,
   });
   const token = app.jwt.sign({ sub: owner.id, tenantId: tenant.id, role: 'owner' });

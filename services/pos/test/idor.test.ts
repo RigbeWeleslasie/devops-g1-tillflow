@@ -12,6 +12,8 @@ import { buildApp } from '../src/app.js';
 import { getSale, createSale } from '../src/services/saleService.js';
 import { FakePaymentsClient } from './fakes/fakePaymentsClient.js';
 
+const TEST_SERVICE_TOKEN = 'test-service-token-0123456789abcdef';
+
 test('service layer: getSale scoped to the wrong tenant returns null, not the row', async () => {
   const { db } = createTestDb();
   const tenantA = await seedTenant(db, { productPriceMinor: 300 });
@@ -37,7 +39,7 @@ test('HTTP layer: cross-tenant GET /sales/:id returns 404, identical to a nonexi
   const tenantA = await seedTenant(db, { productPriceMinor: 300 });
   const tenantB = await seedTenant(db, { productPriceMinor: 500 });
 
-  const app = await buildApp({
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN,
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',
@@ -86,7 +88,7 @@ test('HTTP layer: cross-tenant GET /tenants/:id is also 404 (owner-route IDOR, n
   const tenantA = await seedTenant(db);
   const tenantB = await seedTenant(db);
 
-  const app = await buildApp({
+  const app = await buildApp({ serviceToken: TEST_SERVICE_TOKEN,
     db,
     paymentsClient: new FakePaymentsClient(),
     jwtSecret: 'test-secret',

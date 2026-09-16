@@ -35,17 +35,25 @@ interface MpesaAdapter {
 
 ### FakeAdapter behaviour (deterministic, controllable)
 
-Outcome is selected by the **amount's minor units** (or an explicit test header) so every
-scenario is reproducible with no randomness:
+Outcome is selected by the **last two digits of the shilling amount** (or an explicit test
+header) so every scenario is reproducible with no randomness:
 
-| Trigger (amountMinor % 100, or `X-Fake-Scenario` header) | STK result |
-| ------------------------------------------------------- | ---------- |
-| `...00` (default)   | success — callback with `ResultCode 0` after configurable delay |
-| `...01`             | customer cancelled — `ResultCode 1032` |
-| `...02`             | insufficient funds — `ResultCode 1` |
-| `...03`             | **timeout** — no ack within the HTTP timeout, callback never arrives (drives the "timeout is not a decline" drill) |
-| `...04`             | ack OK, then **duplicate callback** delivered twice + out of order (drives replay drill) |
-| `...05`             | ack OK, callback delayed > 60s (drives the Payments SLO / reconciliation path) |
+| Trigger (KES % 100, or `X-Fake-Scenario` header) | STK result |
+| ------------------------------------------------ | ---------- |
+| `..00` e.g. KES 100 (default)  | success — callback with `ResultCode 0` after configurable delay |
+| `..01` e.g. KES 101            | customer cancelled — `ResultCode 1032` |
+| `..02` e.g. KES 102            | insufficient funds — `ResultCode 1` |
+| `..03` e.g. KES 103            | **timeout** — no ack within the HTTP timeout, callback never arrives (drives the "timeout is not a decline" drill) |
+| `..04` e.g. KES 104            | ack OK, then **duplicate callback** delivered twice + out of order (drives replay drill) |
+| `..05` e.g. KES 105            | ack OK, callback delayed > 60s (drives the Payments SLO / reconciliation path) |
+| anything else                  | success — ordinary money |
+
+> **Amended 2026-09-15 (G2 implementation).** The first draft keyed on `amountMinor % 100`
+> (the cents). Daraja only accepts whole-shilling amounts, so a cents-based key could never
+> reach a fake Daraja over HTTP — it only worked in-process. Keying on the shilling amount
+> makes the rule identical for the in-process fake and the k6 stub-server. Consequence:
+> both adapters **refuse** a fractional-shilling amount rather than rounding, and product
+> prices must therefore be whole shillings (`unit_price_minor % 100 == 0`).
 
 - Callbacks are delivered by the fake POSTing to the Payments callback URL, so the full
   callback code path (dedupe, transition, ledger effect, trace) is exercised.

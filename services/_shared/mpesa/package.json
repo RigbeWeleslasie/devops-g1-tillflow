@@ -1,0 +1,29 @@
+{
+  "name": "@tillflow/mpesa",
+  "version": "0.0.0",
+  "private": true,
+  "description": "M-Pesa (Daraja 3.0) adapter: one interface, two implementations — a real DarajaAdapter for the sandbox and a deterministic FakeAdapter for every test, CI run and k6 scenario. ADR 0005. DRI: Nebyat (Payments + integrity); path co-owned with Meron per CODEOWNERS.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "node --import tsx --test 'test/**/*.test.ts'",
+    "stub": "node --import tsx src/stub-server.ts",
+    "prelint": "npm run build --workspace=@tillflow/shared",
+    "pretest": "npm run build --workspace=@tillflow/shared"
+  },
+  "dependencies": {
+    "@tillflow/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3",
+    "tsx": "4.23.13"
+  }
+}
