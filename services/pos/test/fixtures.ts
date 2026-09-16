@@ -15,7 +15,8 @@ export async function seedTenant(db: Db, opts?: { productPriceMinor?: number }) 
   });
   const product = await createProduct(db, tenant.id, {
     name: 'Widget',
-    unitPriceMinor: opts?.productPriceMinor ?? 250,
+    // Default is whole shillings (KES 250.00). M-Pesa cannot carry cents.
+    unitPriceMinor: opts?.productPriceMinor ?? 25_000,
   });
   return { tenant, owner, attendant, product };
 }

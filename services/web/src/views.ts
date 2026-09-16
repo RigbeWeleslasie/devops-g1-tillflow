@@ -138,7 +138,12 @@ export function salePage(sale: {
     <p>Charge id: ${sale.chargeId ? escapeHtml(sale.chargeId) : '—'}</p>
     ${
       sale.status === 'UNPAID'
-        ? `<form method="post" action="/sell/${escapeHtml(sale.id)}/pay"><button type="submit">Pay via M-Pesa</button></form>`
+        ? `<form method="post" action="/sell/${escapeHtml(sale.id)}/pay">
+      <label>Customer MSISDN (STK Push)
+        <input name="customerMsisdn" required pattern="254[71][0-9]{8}" placeholder="2547XXXXXXXX">
+      </label>
+      <button type="submit">Pay via M-Pesa</button>
+    </form>`
         : ''
     }
     <p><a href="/sell/${escapeHtml(sale.id)}">Refresh</a> — the sale flips to PAID asynchronously once the

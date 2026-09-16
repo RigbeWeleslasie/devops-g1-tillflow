@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newDb, type IMemoryDb } from 'pg-mem';
+import { newDb, DataType, type IMemoryDb } from 'pg-mem';
 import type { Db } from '../src/db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +15,14 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
 export function createTestDb(): { db: Db; mem: IMemoryDb } {
   const mem = newDb({ autoCreateForeignKeyIndices: true });
+
+  // pg-mem lacks the built-in mod(). Whole-shilling CHECKs use mod(x, 100).
+  mem.public.registerFunction({
+    name: 'mod',
+    args: [DataType.integer, DataType.integer],
+    returns: DataType.integer,
+    implementation: (a: number, b: number) => a % b,
+  });
 
   const files = fs
     .readdirSync(MIGRATIONS_DIR)
