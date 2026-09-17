@@ -41,6 +41,9 @@ import type {
   CreateChargeRequest,
   CreateChargeResult,
 } from '@tillflow/pos/dist/services/paymentsClient.js';
+import { runClose, type CloseResult } from '@tillflow/commission/dist/services/closeService.js';
+import { HttpPosClient } from '@tillflow/commission/dist/clients/posClient.js';
+import { HttpPaymentsClient } from '@tillflow/commission/dist/clients/paymentsClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(__dirname, '..', '..', '..');
@@ -61,6 +64,38 @@ function loadDb(migrationsDir: string) {
   }
   const adapter = mem.adapters.createPg();
   return new adapter.Pool();
+}
+
+/**
+ * A `fetch` that dials a Fastify app in-process.
+ *
+ * This is what lets Commission's REAL HttpPosClient and HttpPaymentsClient run
+ * against the REAL POS and Payments routes. Both clients take an injectable
+ * `fetchImpl`, so nothing in the client is stubbed: the service token header,
+ * the status-code vocabulary, the JSON parsing and the error branches are all
+ * the production code paths. Only the socket is replaced.
+ */
+function injectFetch(app: FastifyInstance): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(raw);
+    const res = await app.inject({
+      method: (init?.method ?? 'GET') as 'GET' | 'POST',
+      url: url.pathname + url.search,
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      ...(init?.body === undefined || init.body === null
+        ? {}
+        : { payload: init.body as string }),
+    });
+
+    // 204/304 must not carry a body, or the Response constructor throws.
+    const body = res.statusCode === 204 || res.statusCode === 304 ? null : res.rawPayload;
+    const contentType = res.headers['content-type'];
+    return new Response(body, {
+      status: res.statusCode,
+      headers: typeof contentType === 'string' ? { 'content-type': contentType } : {},
+    });
+  }) as typeof fetch;
 }
 
 /**
@@ -105,6 +140,11 @@ export interface Stack {
   deliverCallbacks: (opts?: { order?: 'fifo' | 'reverse' }) => Promise<number>;
   /** Publish outbox rows to the queue, then let POS consume them. */
   pump: () => Promise<{ published: number; consumed: number }>;
+  /**
+   * Run Commission's daily close across the real seam: its own HTTP clients
+   * read POS's /internal/daily-close and POST Payments' /payouts for real.
+   */
+  runDailyClose: (businessDay: string) => Promise<CloseResult>;
   now: () => number;
   advance: (ms: number) => void;
   close: () => Promise<void>;
@@ -170,6 +210,24 @@ export async function startStack(opts: { startMs?: number } = {}): Promise<Stack
       const consumed = await runSalePaidConsumer({ db: posDb, source: queue });
       return { published: relay.published, consumed };
     },
+    // Commission shares the payments schema and role (ADR 0003), so it reads
+    // and writes `paymentsDb` — the same database Payments itself uses, which
+    // is exactly the production arrangement.
+    runDailyClose: (businessDay) =>
+      runClose(businessDay, {
+        db: paymentsDb,
+        pos: new HttpPosClient({
+          baseUrl: 'http://pos.test',
+          serviceToken: SERVICE_TOKEN,
+          fetchImpl: injectFetch(pos),
+        }),
+        payments: new HttpPaymentsClient({
+          baseUrl: CALLBACK_BASE,
+          serviceToken: SERVICE_TOKEN,
+          fetchImpl: injectFetch(payments),
+        }),
+        now,
+      }),
     now: () => nowMs,
     advance: (ms) => {
       nowMs += ms;
@@ -184,7 +242,7 @@ export async function startStack(opts: { startMs?: number } = {}): Promise<Stack
 /** Seed a tenant, owner, attendant and product through POS's real API. */
 export async function seedTenantViaApi(
   stack: Stack,
-  opts: { unitPriceMinor?: number } = {},
+  opts: { unitPriceMinor?: number; rateBps?: number } = {},
 ): Promise<{ tenantId: string; attendantId: string; productId: string; token: string }> {
   const created = await stack.pos.inject({
     method: 'POST',
@@ -232,8 +290,23 @@ export async function seedTenantViaApi(
     method: 'POST',
     url: `/tenants/${tenant.id}/rates`,
     headers: auth,
-    payload: { rateBps: 500 },
+    payload: { rateBps: opts.rateBps ?? 500 },
   });
+
+  // POS has no injectable clock (Payments does), so `commission_rates.
+  // effective_from` defaults to the DATABASE's now() -- the real wall clock --
+  // while every timestamp this harness controls comes from the frozen clock.
+  // The rate would therefore be stamped AFTER the sale it is meant to govern,
+  // and `internal.ts` resolves rates with `effective_from < paid_at`, so the
+  // close would silently compute 0% for every attendant.
+  //
+  // Backdated here rather than worked around in each test: the ordering being
+  // asserted is "the rate was in force when the sale happened", which is a
+  // property of the scenario, not of when the row was physically inserted.
+  await stack.posDb.query(
+    `UPDATE commission_rates SET effective_from = $1 WHERE tenant_id = $2`,
+    [new Date(stack.now() - 86_400_000).toISOString(), tenant.id],
+  );
 
   const attendantToken = (
     await stack.pos.inject({

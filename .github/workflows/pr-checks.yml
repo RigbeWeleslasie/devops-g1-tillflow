@@ -31,6 +31,7 @@ jobs:
       commission: ${{ steps.filter.outputs.commission }}
       shared: ${{ steps.filter.outputs.shared }}
       infra: ${{ steps.filter.outputs.infra }}
+      integration: ${{ steps.filter.outputs.integration }}
       services: ${{ steps.build.outputs.services }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +45,9 @@ jobs:
             payments: [ 'services/payments/**', 'services/_shared/**' ]
             commission: [ 'services/commission/**', 'services/_shared/**' ]
             infra: 'infra/**'
+            # The cross-service suite wires POS, Payments and Commission
+            # together for real, so ANY of them can break it.
+            integration: [ 'tests/integration/**', 'services/**' ]
 
       # Collapse the filter booleans into a JSON array the matrix can consume,
       # so unchanged services produce no job at all rather than a skipped one.
@@ -90,7 +94,7 @@ jobs:
               | xargs -0 -r -n1 node --check
           fi
 
-      - name: Unit + integration tests (deterministic fake M-Pesa adapter)
+      - name: Unit tests (deterministic fake M-Pesa adapter)
         working-directory: services/${{ matrix.service }}
         env:
           MPESA_ADAPTER: fake   # never the Daraja sandbox in CI (brief §Mission)
@@ -103,11 +107,29 @@ jobs:
 
       - name: Docker build (multi-stage, pinned base, non-root)
         run: |
-          docker build \
-            --build-arg COMMIT_SHA=${{ github.sha }} \
-            --build-arg SERVICE_NAME=${{ matrix.service }} \
-            -t ${{ matrix.service }}:${{ github.sha }} \
-            services/_shared/docker
+          # The service's OWN Dockerfile when it has one, with the REPO ROOT as
+          # build context -- the services are npm workspaces that depend on
+          # @tillflow/shared, and those images compile TypeScript into dist/,
+          # which `node dist/server.js` and `node dist/migrate.js` need.
+          #
+          # Building services/_shared/docker for a service that HAS a Dockerfile
+          # was the bug: CI green-ticked a build of the shared reference app, so
+          # a broken real Dockerfile reached main unnoticed. Matches what
+          # deploy.yml and infra/scripts/deploy.sh do (commit 6895d3f).
+          if [ -f "services/${{ matrix.service }}/Dockerfile" ]; then
+            docker build \
+              --build-arg COMMIT_SHA=${{ github.sha }} \
+              --build-arg SERVICE_NAME=${{ matrix.service }} \
+              -f "services/${{ matrix.service }}/Dockerfile" \
+              -t ${{ matrix.service }}:${{ github.sha }} \
+              .
+          else
+            docker build \
+              --build-arg COMMIT_SHA=${{ github.sha }} \
+              --build-arg SERVICE_NAME=${{ matrix.service }} \
+              -t ${{ matrix.service }}:${{ github.sha }} \
+              services/_shared/docker
+          fi
 
       - name: Verify the image runs as non-root
         run: |
@@ -146,6 +168,40 @@ jobs:
           ignore-unfixed: true    # accepted risk needs an owner + expiry, not a red build
           exit-code: '1'
           format: table
+
+  # ---------------------------------------------------------------------------
+  # Cross-service integration tests
+  #
+  # Separate from service-ci on purpose: these are not "a service's tests". They
+  # wire the REAL POS, Payments and Commission together and fake only Daraja, so
+  # they belong to no single matrix entry and must run whenever ANY of the three
+  # changes. Every per-service suite fakes the boundary it depends on, which is
+  # how the tenantId/customerMsisdn mismatch reached main -- both sides passed
+  # against their own idea of the contract. This job is what catches that class.
+  # ---------------------------------------------------------------------------
+  integration-tests:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # From the repo root: the suite imports the built dist/ of four workspaces,
+      # so it needs the whole workspace tree hoisted, not one package's deps.
+      - name: Install workspace
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint --workspace=@tillflow/integration-tests
+
+      - name: Cross-service tests (real services, fake Daraja)
+        env:
+          MPESA_ADAPTER: fake   # never the Daraja sandbox in CI (brief §Mission)
+        run: npm test --workspace=@tillflow/integration-tests
 
   # ---------------------------------------------------------------------------
   # Repo-wide security scans

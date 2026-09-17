@@ -18,6 +18,37 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-17 — The close computed 0% for every attendant, and only the real seam showed it
+- **Area:** tests/integration, services/pos (clock), services/commission
+- **What happened:** The first cross-service run of the `close → commission → B2C` flow
+  returned `payoutsRequested: 0`, `payoutsSkippedZero: 1` and a ledger row with
+  `rate_bps: 0` — on a day with a paid KES 250 sale and a 5% rate set through POS's own
+  API moments earlier. Nobody would have been paid anything.
+- **Impact:** None shipped — caught while writing the flow-2 integration test, before any
+  deploy. Roughly an hour to diagnose.
+- **Root cause:** POS has no injectable clock (Payments does). `commission_rates` gets its
+  `effective_from` from the *database's* `now()` — the real wall clock — while every
+  timestamp the integration harness controls comes from a frozen clock set in the past.
+  So the rate was stamped *after* the sale it was meant to govern, and
+  `services/pos/src/routes/internal.ts` resolves rates with `effective_from < paid_at`.
+  Strictly correct logic, given data that was silently inconsistent.
+- **Why nothing caught it:** every suite fakes the boundary it depends on.
+  `close.test.ts` uses `FakePosClient`, so it never asked POS for a rate at all; POS's own
+  `internal.test.ts` inserts `commission_rates` directly with an explicit
+  `effective_from`, so it never exercised the default. Both sides were right about their
+  own half. This is the same shape as the `tenantId`/`customerMsisdn` gap below — the
+  second time the identical pattern has produced a real bug.
+- **Fix:** `seedTenantViaApi` backdates `effective_from` after seeding, with the reasoning
+  in a comment, so the ordering under test is "the rate was in force when the sale
+  happened" rather than an accident of insertion time.
+- **Prevention:** `tests/integration/test/closeToPayout.test.ts` now asserts
+  `rate_bps: 500` on the ledger row, so a rate that silently resolves to zero fails the
+  build. The suite runs in CI as its own job (`integration-tests`) rather than only by
+  hand. **Still open, for Rigbe:** POS should take an injectable `now` the way
+  `services/payments/src/app.ts` does — the workaround is in the test, not the service, so
+  any future time-dependent POS behaviour has the same trap waiting.
+- **Owner:** Nebyat
+
 ### 2026-09-15 — G2 Track A: real CI run failed on `tsx` not found, despite passing locally
 - **Area:** services/pos, services/web (CI, `.github/workflows/pr-checks.yml`'s `service-ci` job)
 - **What happened:** The actual GitHub Actions run for this PR failed every `services/pos`
