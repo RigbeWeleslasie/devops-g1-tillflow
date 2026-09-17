@@ -243,7 +243,12 @@ resource "aws_ecs_task_definition" "migrate" {
     environment = [
       { name = "ENVIRONMENT", value = var.environment },
       { name = "AWS_REGION", value = var.aws_region },
-      { name = "DB_SECRET_PREFIX", value = "${local.prefix}/" },
+      # No trailing slash: the migrator builds `${prefix}/${APP_SERVICE}/db-password`
+      # itself (services/*/src/migrate.ts), so "devops-g1/" would resolve to
+      # `devops-g1//pos/db-password` -- a secret that does not exist. The write
+      # then fails and `database_url` is never populated, which is the one key
+      # every task definition injects.
+      { name = "DB_SECRET_PREFIX", value = local.prefix },
       { name = "APP_SERVICE", value = each.key },
       { name = "APP_SCHEMA", value = each.key },
       { name = "APP_ROLE", value = "${local.prefix}-${each.key}-app" },

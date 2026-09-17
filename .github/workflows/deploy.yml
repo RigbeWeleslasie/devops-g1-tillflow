@@ -161,11 +161,25 @@ jobs:
             echo "image for ${{ github.sha }} already in ECR — reusing $existing"
             digest="$existing"
           else
-            docker build --platform linux/amd64 --provenance=false \
-              --build-arg COMMIT_SHA=${{ github.sha }} \
-              --build-arg SERVICE_NAME=${{ matrix.service }} \
-              -t "$REPO:${{ github.sha }}" \
-              services/_shared/docker
+            # The service's own Dockerfile when it has one: those compile
+            # TypeScript into dist/, which `node dist/server.js` needs. Context
+            # is the repo root -- the services are npm workspaces depending on
+            # @tillflow/shared. services/_shared/docker is the fallback for a
+            # service with no code yet.
+            if [ -f "services/${{ matrix.service }}/Dockerfile" ]; then
+              docker build --platform linux/amd64 --provenance=false \
+                --build-arg COMMIT_SHA=${{ github.sha }} \
+                --build-arg SERVICE_NAME=${{ matrix.service }} \
+                -f "services/${{ matrix.service }}/Dockerfile" \
+                -t "$REPO:${{ github.sha }}" \
+                .
+            else
+              docker build --platform linux/amd64 --provenance=false \
+                --build-arg COMMIT_SHA=${{ github.sha }} \
+                --build-arg SERVICE_NAME=${{ matrix.service }} \
+                -t "$REPO:${{ github.sha }}" \
+                services/_shared/docker
+            fi
             docker push "$REPO:${{ github.sha }}"
 
             # Resolve the immutable digest -- what we actually deploy.
