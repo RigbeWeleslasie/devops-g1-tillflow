@@ -304,6 +304,41 @@ resource "aws_apigatewayv2_integration" "alb" {
   # and the ALB's SG accepts the VPC Link SG only.
 }
 
+# Daraja callbacks: strip the routing prefix before the request reaches Payments.
+#
+# The public URL must carry `/payments` so the internal ALB knows where to send
+# it, but the service registers `/callbacks/stk` at root. Something has to remove
+# the prefix in between, and the ALB cannot: a forward action has no rewrite, and
+# a redirect is not something Daraja follows on a POST.
+#
+# So a dedicated route with a parameter mapping, sitting at a more specific path
+# than `ANY /{proxy+}` (API Gateway prefers the specific match). `overwrite:path`
+# rewrites `/payments/callbacks/stk` to `/callbacks/stk` on the way through.
+#
+# POST only: these are Daraja's server-to-server callbacks, nothing else.
+resource "aws_apigatewayv2_integration" "payments_callbacks" {
+  api_id             = aws_apigatewayv2_api.main.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = aws_lb_listener.https.arn
+  integration_method = "ANY"
+
+  connection_type = "VPC_LINK"
+  connection_id   = aws_apigatewayv2_vpc_link.main.id
+
+  payload_format_version = "1.0"
+  timeout_milliseconds   = 29000
+
+  request_parameters = {
+    "overwrite:path" = "/callbacks/$request.path.proxy"
+  }
+}
+
+resource "aws_apigatewayv2_route" "payments_callbacks" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "POST /payments/callbacks/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.payments_callbacks.id}"
+}
+
 resource "aws_apigatewayv2_route" "proxy" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "ANY /{proxy+}"

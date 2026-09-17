@@ -75,8 +75,12 @@ resource "aws_service_discovery_service" "service" {
 # service token, and a rule per direction would be six rules to maintain for a
 # boundary the token already holds. The SG still excludes everything outside
 # the VPC.
+# Excludes `commission`, for the same reason ecs.tf's ALB ingress rule does: it
+# is a worker with no inbound API, so an open app port would sit unused and
+# silently pre-authorize any future mis-wiring of a caller straight to it.
+# Commission calls out to POS and Payments; nothing calls in.
 resource "aws_vpc_security_group_ingress_rule" "service_from_service" {
-  for_each = toset(local.services)
+  for_each = toset([for s in local.services : s if s != "commission"])
 
   security_group_id = aws_security_group.service[each.key].id
   from_port         = var.app_port
@@ -127,6 +131,16 @@ locals {
 
   # Daraja posts callbacks from the public internet, so this is the API Gateway
   # endpoint -- not an internal name.
+  #
+  # The `/payments` prefix is what the ALB listener rule routes on (edge.tf); the
+  # dedicated `POST /payments/callbacks/{proxy+}` route in edge.tf strips it back
+  # off before the request reaches the container.
+  #
+  # It has to be stripped somewhere: Payments registers `/callbacks/stk` at root,
+  # ALB forward actions cannot rewrite a path (only redirect, which Daraja will
+  # not follow on a POST), and API Gateway's catch-all `ANY /{proxy+}` passes the
+  # raw path through. Without the rewrite every callback 404s -- the same shape as
+  # the smoke-path bug in PR #5, and invisible until a real callback arrives.
   mpesa_callback_base_url = "${aws_apigatewayv2_api.main.api_endpoint}/payments"
 
   service_env = {
