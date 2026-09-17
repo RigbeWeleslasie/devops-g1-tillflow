@@ -31,6 +31,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
 const APP_SCHEMA = process.env['APP_SCHEMA'] ?? 'payments';
+/** Which service's secret path to write. Commission shares the payments schema but has its own secret. */
+const APP_SERVICE = process.env['APP_SERVICE'] ?? 'payments';
 const APP_ROLE = process.env['APP_ROLE'] ?? 'devops-g1-payments-app';
 const WRITE_SECRET = process.argv.includes('--write-secret');
 
@@ -101,6 +103,19 @@ async function main(): Promise<void> {
       }
     }
 
+    // The app's queries are unqualified (`SELECT ... FROM charges`), so the
+    // role needs `payments` on its search_path or every one of them fails with
+    // `relation "charges" does not exist`. Postgres defaults a role to
+    // `"$user", public`, which contains none of our tables.
+    //
+    // Set on the ROLE, not just in the connection string, so it holds however
+    // the app connects — psql, a hand-built URL, a pooler that resets session
+    // state. The URL below carries it too; this failure mode is total and
+    // silent-until-runtime, so it is worth both.
+    await client.query(
+      `ALTER ROLE "${APP_ROLE}" SET search_path TO "${APP_SCHEMA}", public`,
+    );
+
     // Least privilege: CRUD, never DDL, on current and future tables.
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${APP_SCHEMA}" TO "${APP_ROLE}"`,
@@ -111,7 +126,7 @@ async function main(): Promise<void> {
 
     if (appPassword) {
       if (WRITE_SECRET) {
-        await writeSecretPassword(appPassword);
+        await writeAppSecret(appPassword, adminUrl);
       } else {
         console.log('');
         console.log('Generated app password (save this now -- it is never printed again):');
@@ -129,16 +144,63 @@ async function main(): Promise<void> {
   }
 }
 
-async function writeSecretPassword(password: string): Promise<void> {
-  const { SecretsManagerClient, PutSecretValueCommand } = await import('@aws-sdk/client-secrets-manager');
-  const region = process.env['AWS_REGION'] ?? 'us-east-1';
-  const secretId = process.env['DB_PASSWORD_SECRET_ID'] ?? 'devops-g1/payments/db-password';
-  const client = new SecretsManagerClient({ region });
-  await client.send(new PutSecretValueCommand({ SecretId: secretId, SecretString: JSON.stringify({ password }) }));
-  console.log(`Wrote the app password to Secrets Manager: ${secretId}`);
+/**
+ * The app's connection URL, built from the admin URL's host/port/database with
+ * the app role's own credentials substituted in.
+ *
+ * search_path rides along in the URL as well as on the role: the app's queries
+ * are unqualified, and a connection that lands on the wrong search_path fails
+ * every single one of them.
+ */
+export function buildAppDatabaseUrl(adminUrl: string, password: string): string {
+  const admin = new URL(adminUrl);
+  const url = new URL(adminUrl);
+  url.username = encodeURIComponent(APP_ROLE);
+  url.password = encodeURIComponent(password);
+  url.search = '';
+  url.searchParams.set('options', `-c search_path=${APP_SCHEMA},public`);
+  // Keep the admin URL's database and host untouched — same server, same
+  // database, different role.
+  url.pathname = admin.pathname;
+  return url.toString();
 }
 
-main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+/**
+ * Writes the app credentials to Secrets Manager.
+ *
+ * BOTH keys, always. `PutSecretValue` replaces the whole document rather than
+ * merging, so writing only `{password}` would delete the `database_url` the
+ * ECS task definition injects (infra/service-mesh.tf reads
+ * `...:database_url::`), and `ignore_changes` on the Terraform placeholder
+ * means nothing would put it back. Every service would then fail container
+ * start. Writing one key used to be exactly that bug.
+ */
+async function writeAppSecret(password: string, adminUrl: string): Promise<void> {
+  const { SecretsManagerClient, PutSecretValueCommand } = await import('@aws-sdk/client-secrets-manager');
+  const region = process.env['AWS_REGION'] ?? 'us-east-1';
+  // DB_SECRET_PREFIX is what the migration task passes (infra/migrate.tf);
+  // DB_PASSWORD_SECRET_ID stays supported for a hand-run.
+  const prefix = process.env['DB_SECRET_PREFIX'] ?? 'devops-g1';
+  const secretId = process.env['DB_PASSWORD_SECRET_ID'] ?? `${prefix}/${APP_SERVICE}/db-password`;
+
+  const client = new SecretsManagerClient({ region });
+  await client.send(
+    new PutSecretValueCommand({
+      SecretId: secretId,
+      SecretString: JSON.stringify({
+        password,
+        database_url: buildAppDatabaseUrl(adminUrl, password),
+      }),
+    }),
+  );
+  console.log(`Wrote password + database_url to Secrets Manager: ${secretId}`);
+}
+
+// Only run when invoked as a program — importing this module (tests) must not
+// connect to a database.
+if (process.argv[1] && /migrate\.[cm]?[jt]s$/.test(process.argv[1])) {
+  main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

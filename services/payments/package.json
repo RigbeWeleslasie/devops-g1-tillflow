@@ -2,7 +2,7 @@
   "name": "@tillflow/payments",
   "version": "0.0.0",
   "private": true,
-  "description": "Payments API — sole owner of Daraja: STK Push, callbacks, transaction query, B2C, reconciliation. Charge/payout state machines, idempotency, replay safety (I2–I5). DRI: Nebyat (Payments + integrity).",
+  "description": "Payments API \u2014 sole owner of Daraja: STK Push, callbacks, transaction query, B2C, reconciliation. Charge/payout state machines, idempotency, replay safety (I2\u2013I5). DRI: Nebyat (Payments + integrity).",
   "type": "module",
   "scripts": {
     "build": "tsc -b",
@@ -10,10 +10,11 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "start": "node dist/server.js",
     "dev": "node --import tsx --watch src/server.ts",
-    "migrate": "node --import tsx scripts/migrate.ts",
+    "migrate": "node --import tsx src/migrate.ts",
     "test": "node --import tsx --test 'test/**/*.test.ts'",
     "prelint": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa",
-    "pretest": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa"
+    "pretest": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa",
+    "migrate:dist": "node dist/migrate.js"
   },
   "dependencies": {
     "@tillflow/shared": "*",
