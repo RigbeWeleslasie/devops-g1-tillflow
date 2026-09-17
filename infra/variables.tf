@@ -152,6 +152,19 @@ variable "mpesa_adapter" {
   }
 }
 
+variable "pos_worker_enabled" {
+  description = <<-EOT
+    Run the POS sale.paid consumer (infra/worker.tf).
+
+    Off until the POS image contains `dist/worker.js`. The image deployed today
+    is the shared reference app, which does not -- so enabling this before a real
+    POS build would crash-loop the service. Flip it on in the same change that
+    deploys an image built from services/pos.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "service_desired_count" {
   description = <<-EOT
     Running tasks per service; Terraform owns this, the pipeline owns the image.

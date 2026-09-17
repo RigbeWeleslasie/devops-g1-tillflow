@@ -217,7 +217,9 @@ resource "aws_ecs_task_definition" "migrate" {
     essential = true
 
     # Overridden per invocation; a no-op default so a bare run-task does nothing
-    # destructive.
+    # destructive. The real command is `node dist/migrate.js --write-secret`
+    # with APP_SERVICE / APP_SCHEMA / APP_ROLE supplied per run -- see
+    # `migrate_run_task_command` below and docs/runbook.md.
     command = ["node", "-e", "console.log('pass --overrides to select a service; see docs/runbook.md')"]
 
     user                   = "1000:1000"
@@ -253,12 +255,31 @@ resource "aws_ecs_task_definition" "migrate" {
 
 output "migrate_run_task_command" {
   description = "Copy-paste for the runbook: run one service's migrations."
-  value       = <<-EOT
+
+  # `node dist/migrate.js`, not npm: the runtime image deletes npm/yarn and
+  # strips devDependencies, so neither npm nor tsx exists in it. The migrator
+  # lives in src/ and compiles into dist/, which the image already copies.
+  #
+  # APP_SERVICE / APP_SCHEMA / APP_ROLE are read by the migrator, so one task
+  # definition covers both services -- but only for images that contain both
+  # migrators. `containerOverrides` has no image field, so a POS image cannot run
+  # the Payments migration: run each against a task definition built from its own
+  # image, or from one image carrying both.
+  value = <<-EOT
+    # POS
     aws ecs run-task \
       --cluster ${aws_ecs_cluster.main.name} \
       --task-definition ${aws_ecs_task_definition.migrate.family} \
       --launch-type FARGATE \
       --network-configuration 'awsvpcConfiguration={subnets=[${join(",", [for s in aws_subnet.private : s.id])}],securityGroups=[${aws_security_group.migrate.id}],assignPublicIp=DISABLED}' \
-      --overrides '{"containerOverrides":[{"name":"migrate","command":["npm","run","migrate","--workspace=@tillflow/<SERVICE>","--","--write-secret"]}]}'
+      --overrides '{"containerOverrides":[{"name":"migrate",
+        "command":["node","dist/migrate.js","--write-secret"],
+        "environment":[{"name":"APP_SERVICE","value":"pos"},
+                       {"name":"APP_SCHEMA","value":"pos"},
+                       {"name":"APP_ROLE","value":"${local.prefix}-pos-app"}]}]}'
+
+    # Payments (commission shares this schema and role -- no separate run)
+    # ... same, with APP_SERVICE=payments, APP_SCHEMA=payments,
+    #     APP_ROLE=${local.prefix}-payments-app
   EOT
 }

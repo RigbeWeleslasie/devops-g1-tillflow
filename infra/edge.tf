@@ -157,8 +157,17 @@ resource "aws_lb_listener" "https" {
 # Path routing. `web` is the default; the APIs live under their own prefixes.
 resource "aws_lb_listener_rule" "service" {
   for_each = {
-    pos      = { priority = 10, paths = ["/api/pos/*", "/pos/*"] }
-    payments = { priority = 20, paths = ["/api/payments/*", "/payments/*"] }
+    pos = { priority = 10, paths = ["/api/pos/*", "/pos/*"] }
+    # `/callbacks/*` as well: API Gateway rewrites `/payments/callbacks/stk` to
+    # `/callbacks/stk` before the ALB sees it (the parameter mapping on the
+    # dedicated callbacks route below), so by the time it arrives the `/payments`
+    # prefix is gone. Without this it matches neither rule here, falls through to
+    # the `/*` catch-all, and lands on WEB -- the same 404, one hop further on.
+    #
+    # Safe to scope this way: the ALB is internal and reachable only through API
+    # Gateway, and the one route that can produce `/callbacks/*` is the
+    # payments-only POST route. No other service serves that path.
+    payments = { priority = 20, paths = ["/api/payments/*", "/payments/*", "/callbacks/*"] }
   }
 
   listener_arn = aws_lb_listener.https.arn
