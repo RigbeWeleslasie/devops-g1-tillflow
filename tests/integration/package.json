@@ -6,9 +6,9 @@
   "type": "module",
   "scripts": {
     "lint": "tsc --noEmit",
-    "test:integration": "node --import tsx --test 'test/**/*.test.ts'",
-    "pretest:integration": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa --workspace=@tillflow/pos --workspace=@tillflow/payments --workspace=@tillflow/commission",
-    "prelint": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa --workspace=@tillflow/pos --workspace=@tillflow/payments --workspace=@tillflow/commission"
+    "prelint": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa --workspace=@tillflow/pos --workspace=@tillflow/payments --workspace=@tillflow/commission",
+    "pretest": "npm run build --workspace=@tillflow/shared --workspace=@tillflow/mpesa --workspace=@tillflow/pos --workspace=@tillflow/payments --workspace=@tillflow/commission",
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
   },
   "devDependencies": {
     "@tillflow/shared": "*",
