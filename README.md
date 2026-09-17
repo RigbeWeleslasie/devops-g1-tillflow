@@ -87,8 +87,17 @@ make destroy       # tear everything down
 
 ## Status
 
-G0 and G1 (platform golden path) landed on `main`. G2 Track A (Product + POS — sale
-creation, idempotency, IDOR, the `sale.paid` consumer, the web shell) is built and tested
-on `feat/g2-pos-track-a`; see `docs/gates.md` for exactly what's proven vs. still open, and
-`evidence/product-pos/` for reproduction commands. Track B (Payments + integrity) not yet
-started.
+G0, G1 (platform golden path) and G2 (product) are on `main`.
+
+Both G2 flows are proven end to end across the real service seams, with only the M-Pesa
+provider faked (`tests/integration/`): **sale → STK callback → paid**, and **close →
+commission → B2C**. `npm test` runs 214 tests across seven workspaces.
+
+The three G2 blocked-if conditions are cleared: failure paths sit beside every success
+path, money is integer minor units with one documented rounding rule and a carried
+remainder, and Commission cannot call Daraja — `@tillflow/mpesa` is not one of its
+dependencies.
+
+Still open: no real Postgres/RDS run (tests are pg-mem-backed), and nothing is deployed to
+ECS yet — infra applies cleanly but no service images have been released. See
+`docs/gates.md` for the full per-track status and `evidence/` for reproduction commands.

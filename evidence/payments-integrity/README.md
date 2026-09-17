@@ -38,10 +38,45 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments      # 84 tests
-npm test --workspace=@tillflow/commission    # 40 tests
-npm test --workspace=@tillflow/mpesa         # 32 tests
+npm test --workspace=@tillflow/payments           # 88 tests
+npm test --workspace=@tillflow/commission         # 40 tests
+npm test --workspace=@tillflow/mpesa              # 32 tests
+npm test --workspace=@tillflow/integration-tests  #  9 tests
 ```
+
+Or the whole repo — `npm ci && npm test` — 214 tests across seven workspaces.
+
+## Both G2 flows, across the real seams
+
+Every suite above proves one service against its own idea of the contract, because
+each one fakes the boundary it depends on. That is not a hypothetical weakness: it
+is how the `tenantId`/`customerMsisdn` mismatch reached `main` (`docs/scar-log.md`).
+`tests/integration/` closes it by wiring the real services together and faking only
+Daraja.
+
+```bash
+npm test --workspace=@tillflow/integration-tests   # 9 tests, 0 failing
+```
+
+| Flow | File | What is real | What is faked |
+| ---- | ---- | ------------ | ------------- |
+| sale → STK callback → paid | `test/saleToPaid.test.ts` | POS, Payments, the outbox relay, the `sale.paid` consumer | Daraja, SQS |
+| close → commission → B2C | `test/closeToPayout.test.ts` | POS `/internal/daily-close`, Payments `/payouts`, Commission's own `HttpPosClient` and `HttpPaymentsClient` | Daraja |
+
+The second flow runs Commission's HTTP clients unmodified — `injectFetch()` in the
+harness replaces the socket, not the client — so the service-token header, the
+status-code vocabulary, the JSON parsing and every error branch are production code
+paths. What it covers:
+
+- the happy close: one ledger row, one B2C, lands `PAID`, with
+  `amount_minor = payout_minor + remainder_minor` asserted so the rounding cannot
+  silently create or destroy money
+- **I4** on replay: re-running the same day creates no second ledger row, no second
+  payout and no second B2C
+- a failed disbursement: terminal `FAILED`, and a re-close does **not** retry it —
+  an automatic retry of a disbursement is how a double payment happens
+- sub-shilling commission: pays nothing, banks the remainder, never calls Daraja
+- an empty day: completes, moves no money
 
 To run a single scenario, pass the pattern to `node` directly:
 
