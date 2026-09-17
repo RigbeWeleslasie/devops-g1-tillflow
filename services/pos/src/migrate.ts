@@ -28,6 +28,8 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
 const APP_SCHEMA = process.env['APP_SCHEMA'] ?? 'pos';
 const APP_ROLE = process.env['APP_ROLE'] ?? 'devops-g1-pos-app';
+/** Which service's secret path to write. */
+const APP_SERVICE = process.env['APP_SERVICE'] ?? 'pos';
 const WRITE_SECRET = process.argv.includes('--write-secret');
 
 async function main(): Promise<void> {
@@ -103,6 +105,18 @@ async function main(): Promise<void> {
       }
     }
 
+    // The app's queries are unqualified (`SELECT ... FROM sales`), so the role
+    // needs `pos` on its search_path or every one of them fails with
+    // `relation "sales" does not exist`. Postgres defaults a role to
+    // `"$user", public`, which contains none of our tables. pg-mem puts
+    // everything in public, which is why no test catches this.
+    //
+    // Set on the ROLE, not only in the connection string, so it holds however
+    // the app connects.
+    await client.query(
+      `ALTER ROLE "${APP_ROLE}" SET search_path TO "${APP_SCHEMA}", public`,
+    );
+
     // Least privilege: CRUD on existing tables, plus the same for anything a
     // future migration adds, without ever granting DDL rights to the app role.
     await client.query(
@@ -114,7 +128,7 @@ async function main(): Promise<void> {
 
     if (appPassword) {
       if (WRITE_SECRET) {
-        await writeSecretPassword(appPassword);
+        await writeAppSecret(appPassword, adminUrl);
       } else {
         console.log('');
         console.log('Generated app password (save this now -- it is never printed again):');
@@ -132,26 +146,59 @@ async function main(): Promise<void> {
   }
 }
 
-async function writeSecretPassword(password: string): Promise<void> {
-  // Dynamic import: the AWS SDK is only needed for this one optional path,
-  // so local/test runs (which never pass --write-secret) don't need it
-  // installed.
-  const { SecretsManagerClient, PutSecretValueCommand } = await import(
-    '@aws-sdk/client-secrets-manager'
-  );
+/**
+ * The app's connection URL: the admin URL's host/port/database with the app
+ * role's own credentials, and search_path pinned because the app's queries
+ * are unqualified.
+ */
+export function buildAppDatabaseUrl(adminUrl: string, password: string): string {
+  const admin = new URL(adminUrl);
+  const url = new URL(adminUrl);
+  url.username = encodeURIComponent(APP_ROLE);
+  url.password = encodeURIComponent(password);
+  url.search = '';
+  url.searchParams.set('options', `-c search_path=${APP_SCHEMA},public`);
+  url.pathname = admin.pathname;
+  return url.toString();
+}
+
+/**
+ * Writes the app credentials to Secrets Manager — BOTH keys, always.
+ *
+ * PutSecretValue replaces the whole document rather than merging, so writing
+ * only {password} would delete the `database_url` the ECS task definition
+ * injects (infra/service-mesh.tf reads `...:database_url::`), and
+ * ignore_changes on the Terraform placeholder means nothing would put it
+ * back. Every service would then fail container start.
+ */
+async function writeAppSecret(password: string, adminUrl: string): Promise<void> {
+  const { SecretsManagerClient, PutSecretValueCommand } = await import('@aws-sdk/client-secrets-manager');
   const region = process.env['AWS_REGION'] ?? 'us-east-1';
-  const secretId = process.env['DB_PASSWORD_SECRET_ID'] ?? 'devops-g1/pos/db-password';
+  // DB_SECRET_PREFIX is what the migration task passes (infra/migrate.tf);
+  // DB_PASSWORD_SECRET_ID stays supported for a hand-run. A trailing slash on
+  // the prefix ("devops-g1/") would otherwise resolve to devops-g1//pos/...,
+  // a secret that does not exist -- strip it.
+  const prefix = (process.env['DB_SECRET_PREFIX'] ?? 'devops-g1').replace(/\/+$/, '');
+  const secretId = process.env['DB_PASSWORD_SECRET_ID'] ?? `${prefix}/${APP_SERVICE}/db-password`;
+
   const client = new SecretsManagerClient({ region });
   await client.send(
     new PutSecretValueCommand({
       SecretId: secretId,
-      SecretString: JSON.stringify({ password }),
+      SecretString: JSON.stringify({
+        password,
+        database_url: buildAppDatabaseUrl(adminUrl, password),
+      }),
     }),
   );
-  console.log(`Wrote the app password to Secrets Manager: ${secretId}`);
+  console.log(`Wrote password + database_url to Secrets Manager: ${secretId}`);
 }
 
-main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run when invoked as a program — importing this module (tests) must not
+// connect to a database.
+if (process.argv[1] && /migrate\.[cm]?[jt]s$/.test(process.argv[1])) {
+  main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
