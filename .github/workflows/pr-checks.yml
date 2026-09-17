@@ -138,19 +138,56 @@ jobs:
           [ -n "$user" ] && [ "$user" != "root" ] && [ "$user" != "0" ] || {
             echo "::error::image must not run as root"; exit 1; }
 
+      # The services validate their configuration at startup (`requireEnv` /
+      # `required(env, ...)`), so the container exits before binding a port when
+      # any is missing -- the probe then fails with "connection refused", which
+      # reads like a broken image rather than a missing variable.
+      #
+      # These values only have to be present and well-formed. Nothing here is
+      # reachable: the DSN points at a port nothing listens on, and the probe
+      # never exercises a route that uses it. They are NOT credentials.
+      #
+      # SERVICE_TOKEN must stay >= 16 characters: serviceAuth.ts rejects anything
+      # shorter at boot, and the container then exits before serving /health --
+      # which looks like a broken image, not a too-short placeholder.
+      #
+      # /ready is asserted as a contract, not a value: services that check a real
+      # dependency (payments, commission) answer not_ready here by design, since
+      # nothing is reachable. deploy.yml's post-deploy smoke asserts "ready"
+      # against real dependencies.
       - name: Smoke the image (health/ready/version)
         run: |
           docker run -d --name probe --read-only -p 18080:8080 \
             -e SERVICE_NAME=${{ matrix.service }} \
             -e COMMIT_SHA=${{ github.sha }} \
+            -e DATABASE_URL=postgresql://probe:probe@127.0.0.1:1/probe \
+            -e JWT_SECRET=probe-only-value-not-a-secret \
+            -e SERVICE_TOKEN=probe-only-value-not-a-secret \
+            -e POS_BASE_URL=http://127.0.0.1:1 \
+            -e PAYMENTS_BASE_URL=http://127.0.0.1:1 \
+            -e MPESA_CALLBACK_BASE_URL=http://127.0.0.1:1 \
+            -e SALE_EVENTS_QUEUE_URL=http://127.0.0.1:1/probe \
+            -e CLOSE_QUEUE_URL=http://127.0.0.1:1/probe \
             ${{ matrix.service }}:${{ github.sha }}
           for i in $(seq 1 20); do
             if curl -fsS localhost:18080/health >/dev/null 2>&1; then break; fi
             sleep 1
           done
+          # A clearer failure than 20 silent curl retries if the process died.
+          if ! curl -fsS localhost:18080/health >/dev/null 2>&1; then
+            echo "::error::${{ matrix.service }} never served /health — container log:"
+            docker logs probe 2>&1 | tail -30
+            docker rm -f probe; exit 1
+          fi
           curl -fsS localhost:18080/health  | tee /dev/stderr | jq -e '.status=="ok"'
-          curl -fsS localhost:18080/ready   | tee /dev/stderr | jq -e '.status=="ready"'
           curl -fsS localhost:18080/version | tee /dev/stderr | jq -e '.sha=="${{ github.sha }}"'
+          # A service whose checkReady queries the database (payments, commission)
+          # correctly reports not_ready here, because there is no database. Assert
+          # the CONTRACT -- /ready answers with a known status -- rather than the
+          # value, and let deploy.yml's post-deploy smoke assert "ready" against a
+          # real dependency. Anything outside this set is a genuine failure.
+          curl -sS localhost:18080/ready | tee /dev/stderr \
+            | jq -e '.status=="ready" or .status=="not_ready" or .status=="draining"'
           docker rm -f probe
 
       - name: SBOM
