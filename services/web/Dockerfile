@@ -26,7 +26,12 @@ RUN npm run build --workspace=@tillflow/shared && \
     npm run build --workspace=@tillflow/web
 
 FROM deps AS prod-deps
-RUN npm ci --workspace=@tillflow/shared --workspace=@tillflow/web --include-workspace-root --omit=dev
+RUN npm ci --workspace=@tillflow/shared --workspace=@tillflow/web --include-workspace-root --omit=dev && \
+    mkdir -p services/web/node_modules
+# npm hoists workspace deps to the root node_modules; a per-workspace
+# node_modules only exists when a version conflicts with the hoisted one.
+# The mkdir guarantees the runtime COPY below has a source either way
+# (a COPY of a missing path fails the build).
 
 FROM base AS runtime
 
@@ -49,7 +54,6 @@ ENV NODE_ENV=production \
     OTEL_SERVICE_NAME=web
 
 COPY --from=prod-deps /app/node_modules ./node_modules/
-COPY --from=prod-deps /app/services/_shared/ts/node_modules services/_shared/ts/node_modules/
 COPY --from=prod-deps /app/services/web/node_modules services/web/node_modules/
 COPY --from=build /app/services/_shared/ts/dist services/_shared/ts/dist/
 COPY --from=build /app/services/web/dist services/web/dist/

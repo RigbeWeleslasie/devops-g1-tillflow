@@ -179,8 +179,10 @@ async function writeAppSecret(password: string, adminUrl: string): Promise<void>
   const { SecretsManagerClient, PutSecretValueCommand } = await import('@aws-sdk/client-secrets-manager');
   const region = process.env['AWS_REGION'] ?? 'us-east-1';
   // DB_SECRET_PREFIX is what the migration task passes (infra/migrate.tf);
-  // DB_PASSWORD_SECRET_ID stays supported for a hand-run.
-  const prefix = process.env['DB_SECRET_PREFIX'] ?? 'devops-g1';
+  // DB_PASSWORD_SECRET_ID stays supported for a hand-run. A trailing slash on
+  // the prefix ("devops-g1/") would otherwise resolve to devops-g1//payments/...,
+  // a secret that does not exist -- strip it.
+  const prefix = (process.env['DB_SECRET_PREFIX'] ?? 'devops-g1').replace(/\/+$/, '');
   const secretId = process.env['DB_PASSWORD_SECRET_ID'] ?? `${prefix}/${APP_SERVICE}/db-password`;
 
   const client = new SecretsManagerClient({ region });
