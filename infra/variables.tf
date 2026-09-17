@@ -136,6 +136,38 @@ variable "service_images" {
   }
 }
 
+variable "mpesa_adapter" {
+  description = <<-EOT
+    Which M-Pesa adapter Payments uses: `daraja` (the sandbox) or `fake` (the
+    deterministic stub). The service refuses to start on `fake` when
+    ENVIRONMENT=prod, so this cannot silently put a stub in front of real money.
+    CI and k6 set `fake` in their own environment, never here.
+  EOT
+  type        = string
+  default     = "daraja"
+
+  validation {
+    condition     = contains(["daraja", "fake"], var.mpesa_adapter)
+    error_message = "mpesa_adapter must be \"daraja\" or \"fake\"."
+  }
+}
+
+variable "pos_worker_enabled" {
+  description = <<-EOT
+    Run the POS sale.paid consumer (infra/worker.tf).
+
+    Off until the POS image contains `dist/worker.js`. The image deployed today
+    is the shared reference app, which does not -- so enabling this before a real
+    POS build would crash-loop the service.
+
+    This sets the INITIAL count only: the service has `desired_count` in
+    `ignore_changes`, so on an already-created service the switch is
+    `aws ecs update-service --desired-count 1`, not this variable.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "service_desired_count" {
   description = <<-EOT
     Running tasks per service; Terraform owns this, the pipeline owns the image.

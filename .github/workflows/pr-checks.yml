@@ -234,11 +234,16 @@ jobs:
       # the PR plan. That is acceptable here because the plan is a review aid,
       # not the authority -- deploy.yml re-plans WITH refresh under ci-deploy on
       # main before applying, so the applied plan is always refresh-accurate.
+      # `-lock-timeout=5m`: a merge to main starts deploy.yml, whose apply holds
+      # the state lock for the length of the apply. A PR plan that starts inside
+      # that window would otherwise fail instantly with "Error acquiring the
+      # state lock ... PutItem" -- a red check that says nothing about the PR.
+      # Waiting is the correct behaviour: the lock is short-lived by design.
       - name: terraform plan
         id: plan
         run: |
           set +e
-          terraform -chdir=infra plan -input=false -no-color -refresh=false -out=tfplan > plan.txt 2>&1
+          terraform -chdir=infra plan -input=false -no-color -refresh=false -lock-timeout=5m -out=tfplan > plan.txt 2>&1
           code=$?
           set -e
           tail -c 60000 plan.txt > plan-trunc.txt

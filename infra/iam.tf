@@ -354,6 +354,66 @@ data "aws_iam_policy_document" "task_exec_extra" {
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${local.prefix}/${each.key}/*"]
   }
 
+  # The shared service token is the one secret that is deliberately NOT
+  # per-service: POS, Payments and Commission must present the same value to
+  # each other, so a per-service path would guarantee drift. `web` is excluded
+  # -- it is a browser-facing shell and never makes an authenticated
+  # service-to-service call.
+  #
+  # The resource attribute, not a constructed ARN with a wildcard. Secrets
+  # Manager appends a random suffix, so `${local.prefix}/service-token-*` is the
+  # obvious workaround -- but it would also match a future
+  # `devops-g1/service-token-admin`, silently granting it to all three services.
+  # `.arn` already carries the real suffix: exact, and it cannot drift. Same
+  # pattern the task-role grants in data.tf use.
+  dynamic "statement" {
+    for_each = each.key == "web" ? [] : [1]
+    content {
+      sid       = "ReadServiceToken"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.service_token.arn]
+    }
+  }
+
+  # Only POS signs browser sessions.
+  dynamic "statement" {
+    for_each = each.key == "pos" ? [1] : []
+    content {
+      sid       = "ReadJwtSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.jwt.arn]
+    }
+  }
+
+  # Only Payments holds Daraja credentials. This is the exec role (the ECS agent
+  # injecting `secrets` at container start); the matching task-role grant in
+  # data.tf is what the application itself uses. Commission appears in neither,
+  # which is the IAM layer of the three that stop it calling Daraja directly --
+  # and the only one that still holds if the code is wrong.
+  dynamic "statement" {
+    for_each = each.key == "payments" ? [1] : []
+    content {
+      sid       = "ReadDarajaCredentials"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.daraja.arn]
+    }
+  }
+
+  # commission shares the payments DB role (ADR 0003), so its agent reads the
+  # payments credential rather than one of its own.
+  dynamic "statement" {
+    for_each = each.key == "commission" ? [1] : []
+    content {
+      sid       = "ReadSharedPaymentsDbSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.service_db_password["payments"].arn]
+    }
+  }
+
   # The ADOT sidecar's config is delivered as an SSM parameter (ecs.tf), and the
   # ECS agent -- not the task -- fetches it at container start. Without this the
   # task cannot be placed at all: ResourceInitializationError, no containers run.

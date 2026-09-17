@@ -157,8 +157,17 @@ resource "aws_lb_listener" "https" {
 # Path routing. `web` is the default; the APIs live under their own prefixes.
 resource "aws_lb_listener_rule" "service" {
   for_each = {
-    pos      = { priority = 10, paths = ["/api/pos/*", "/pos/*"] }
-    payments = { priority = 20, paths = ["/api/payments/*", "/payments/*"] }
+    pos = { priority = 10, paths = ["/api/pos/*", "/pos/*"] }
+    # `/callbacks/*` as well: API Gateway rewrites `/payments/callbacks/stk` to
+    # `/callbacks/stk` before the ALB sees it (the parameter mapping on the
+    # dedicated callbacks route below), so by the time it arrives the `/payments`
+    # prefix is gone. Without this it matches neither rule here, falls through to
+    # the `/*` catch-all, and lands on WEB -- the same 404, one hop further on.
+    #
+    # Safe to scope this way: the ALB is internal and reachable only through API
+    # Gateway, and the one route that can produce `/callbacks/*` is the
+    # payments-only POST route. No other service serves that path.
+    payments = { priority = 20, paths = ["/api/payments/*", "/payments/*", "/callbacks/*"] }
   }
 
   listener_arn = aws_lb_listener.https.arn
@@ -302,6 +311,41 @@ resource "aws_apigatewayv2_integration" "alb" {
   # request returns 500 with no access-log entry. Omitting the block leaves the
   # hop encrypted but unvalidated -- acceptable because it never leaves the VPC
   # and the ALB's SG accepts the VPC Link SG only.
+}
+
+# Daraja callbacks: strip the routing prefix before the request reaches Payments.
+#
+# The public URL must carry `/payments` so the internal ALB knows where to send
+# it, but the service registers `/callbacks/stk` at root. Something has to remove
+# the prefix in between, and the ALB cannot: a forward action has no rewrite, and
+# a redirect is not something Daraja follows on a POST.
+#
+# So a dedicated route with a parameter mapping, sitting at a more specific path
+# than `ANY /{proxy+}` (API Gateway prefers the specific match). `overwrite:path`
+# rewrites `/payments/callbacks/stk` to `/callbacks/stk` on the way through.
+#
+# POST only: these are Daraja's server-to-server callbacks, nothing else.
+resource "aws_apigatewayv2_integration" "payments_callbacks" {
+  api_id             = aws_apigatewayv2_api.main.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = aws_lb_listener.https.arn
+  integration_method = "ANY"
+
+  connection_type = "VPC_LINK"
+  connection_id   = aws_apigatewayv2_vpc_link.main.id
+
+  payload_format_version = "1.0"
+  timeout_milliseconds   = 29000
+
+  request_parameters = {
+    "overwrite:path" = "/callbacks/$request.path.proxy"
+  }
+}
+
+resource "aws_apigatewayv2_route" "payments_callbacks" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "POST /payments/callbacks/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.payments_callbacks.id}"
 }
 
 resource "aws_apigatewayv2_route" "proxy" {

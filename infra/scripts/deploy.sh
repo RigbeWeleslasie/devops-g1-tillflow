@@ -49,11 +49,32 @@ echo "current task definition: $previous"
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$registry" >/dev/null
 
-docker build --platform linux/amd64 --provenance=false \
-  --build-arg "COMMIT_SHA=$sha" \
-  --build-arg "SERVICE_NAME=$SERVICE" \
-  -t "${repo}:${sha}" \
-  "${repo_root}/services/_shared/docker"
+# The service's OWN Dockerfile when it has one -- those are multi-stage builds
+# that compile TypeScript into dist/, which is what `node dist/server.js` and
+# `node dist/migrate.js` need. The build context is the REPO ROOT, because the
+# services are npm workspaces that depend on @tillflow/shared.
+#
+# services/_shared/docker is the fallback for a service with no code yet: a
+# reference app that answers /health, /ready and /version so the platform can be
+# proven before the product exists. Building that for a service that HAS a
+# Dockerfile was the bug -- the image shipped app.js and no dist/, so every
+# `node dist/*.js` command failed with MODULE_NOT_FOUND.
+if [[ -f "${repo_root}/services/${SERVICE}/Dockerfile" ]]; then
+  echo "building from services/${SERVICE}/Dockerfile (context: repo root)"
+  docker build --platform linux/amd64 --provenance=false \
+    --build-arg "COMMIT_SHA=$sha" \
+    --build-arg "SERVICE_NAME=$SERVICE" \
+    -f "${repo_root}/services/${SERVICE}/Dockerfile" \
+    -t "${repo}:${sha}" \
+    "${repo_root}"
+else
+  echo "no services/${SERVICE}/Dockerfile — building the shared reference image"
+  docker build --platform linux/amd64 --provenance=false \
+    --build-arg "COMMIT_SHA=$sha" \
+    --build-arg "SERVICE_NAME=$SERVICE" \
+    -t "${repo}:${sha}" \
+    "${repo_root}/services/_shared/docker"
+fi
 
 docker push "${repo}:${sha}"
 

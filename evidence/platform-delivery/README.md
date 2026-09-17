@@ -185,6 +185,111 @@ The fixtures are real `describe-image-scan-findings` shapes
 (`scan-gate-fixtures/`), and `scan-gate-test.sh` replays the gate's own jq. A
 change that breaks the filter now fails here rather than in a deploy.
 
+## 5d · Service-to-service auth token
+
+`devops-g1/service-token` guards the routes reachable through API Gateway that
+should only ever be called by another service -- POS `/internal/daily-close`,
+Payments `/charges`, `/payouts`, `/admin/*` (threat-model.md §3.2). Requested by
+Payments in [`../payments-integrity/deployment-contract.md`](../payments-integrity/deployment-contract.md).
+
+```bash
+# exists, KMS-encrypted, and the right shape -- without printing the value
+aws secretsmanager describe-secret --secret-id devops-g1/service-token \
+  --query '{Name:Name,KMS:KmsKeyId}'
+aws secretsmanager get-secret-value --secret-id devops-g1/service-token \
+  --query SecretString --output text |
+  jq -r '"length: \(.token|length)  alphanumeric: \(.token|test("^[A-Za-z0-9]+$"))"'
+# length: 48  alphanumeric: true
+
+# who can read it
+for s in pos payments commission web; do
+  aws iam get-role-policy --role-name devops-g1-$s-exec \
+    --policy-name devops-g1-$s-exec-secrets \
+    --query 'PolicyDocument.Statement[?Sid==`ReadServiceToken`].Resource' --output text
+done
+# pos, payments, commission: granted -- web: none
+```
+
+Terraform generates this one rather than taking it out-of-band, because all
+three services must present the *same* value: a per-service secret would
+guarantee drift. `web` is excluded deliberately -- it is a browser-facing shell
+and never makes an authenticated service-to-service call.
+
+Secrets Manager appends a random suffix to every ARN
+(`...:secret:devops-g1/service-token-NPEUKn`), so a hand-written
+`devops-g1/service-token` matches nothing and the task fails at boot with
+`AccessDenied` -- an error that names nothing useful.
+
+The grant therefore uses `aws_secretsmanager_secret.service_token.arn`, which
+already carries the real suffix. A `-*` wildcard would also work, and was the
+first attempt, but it would additionally match a future
+`devops-g1/service-token-admin` and silently grant it to all three services. The
+resource attribute is exact and cannot drift -- the same pattern the task-role
+grants in `data.tf` use.
+
+## 5e · Service configuration and the migration job (contract §2–§4)
+
+`evidence/payments-integrity/deployment-contract.md` lists what Payments and
+Commission need to run. All of it is applied.
+
+```bash
+# Every secret arrives with a JSON-key suffix
+aws ecs describe-task-definition --task-definition devops-g1-payments --output json |
+  jq -r '.taskDefinition.containerDefinitions[] | select(.name=="payments")
+         | .secrets[] | "\(.name) -> \(.valueFrom | sub("^.*:secret:"; ""))"'
+```
+
+```
+SERVICE_TOKEN                  -> devops-g1/service-token-NPEUKn:token::
+DATABASE_URL                   -> devops-g1/payments/db-password-Vndt3I:database_url::
+DARAJA_CONSUMER_KEY            -> devops-g1/daraja-KbBIbh:consumer_key::
+... 7 more DARAJA_*
+```
+
+The trailing `:<key>::` is load-bearing. Without it the container receives the
+whole `{"token":"..."}` JSON as its value -- worse than a crash, because the
+service starts cleanly and every internal call 401s.
+
+**Service discovery (§3).** POS calls Payments; Commission calls both. Routing
+that through the internal ALB would send traffic out of a task and back for a
+call that never leaves the VPC, behind the same listener the public edge uses.
+Cloud Map instead: `devops-g1-pos.devops-g1.internal:8080`.
+
+```bash
+aws servicediscovery list-services --filters "Name=NAMESPACE_ID,Values=$NS" \
+  --query 'Services[].Name' --output text
+# devops-g1-pos  devops-g1-payments  devops-g1-commission  devops-g1-web
+```
+
+**Migration job (§4).** Standalone task definitions -- `aws ecs run-task`, they
+exit, nothing runs until next time. One per migrated service (`pos`,
+`payments`), because each runs its own image and `containerOverrides` has no
+image field: a single definition pinned to one image could never migrate the
+other. `commission` shares the payments schema and role, so it has no run of its
+own.
+
+Deliberately not a pipeline stage: the job needs the RDS master credential, and
+in CI the pipeline role would hold that permission permanently. Here only
+`devops-g1-migrate-exec` can read it -- the ECS agent injects it at container
+start -- and only while a task runs; `devops-g1-migrate-task` is scoped to
+writing the per-service DB secrets. It also is not per-deploy: a migration must
+land *before* the code that needs it, so coupling it to a deploy is backwards.
+
+```bash
+terraform -chdir=infra output migrate_run_task_command
+```
+
+**The Daraja boundary holds at the IAM layer.** `commission` has no
+`ReadDarajaCredentials` statement on either its exec or its task role -- the one
+layer of the three that still holds if the code is wrong:
+
+```bash
+aws iam get-role-policy --role-name devops-g1-commission-exec \
+  --policy-name devops-g1-commission-exec-secrets \
+  --query 'PolicyDocument.Statement[?Sid==`ReadDarajaCredentials`]' --output text
+# (empty)
+```
+
 ## 6 · Account guard
 
 The workstation's `default` profile points at an unrelated account. The provider
