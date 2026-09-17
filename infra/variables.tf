@@ -136,6 +136,22 @@ variable "service_images" {
   }
 }
 
+variable "mpesa_adapter" {
+  description = <<-EOT
+    Which M-Pesa adapter Payments uses: `daraja` (the sandbox) or `fake` (the
+    deterministic stub). The service refuses to start on `fake` when
+    ENVIRONMENT=prod, so this cannot silently put a stub in front of real money.
+    CI and k6 set `fake` in their own environment, never here.
+  EOT
+  type        = string
+  default     = "daraja"
+
+  validation {
+    condition     = contains(["daraja", "fake"], var.mpesa_adapter)
+    error_message = "mpesa_adapter must be \"daraja\" or \"fake\"."
+  }
+}
+
 variable "service_desired_count" {
   description = <<-EOT
     Running tasks per service; Terraform owns this, the pipeline owns the image.

@@ -386,15 +386,23 @@ resource "aws_ecs_task_definition" "service" {
         initProcessEnabled = true # reap zombies; also required for ECS exec
       }
 
-      environment = [
-        { name = "SERVICE_NAME", value = each.key },
-        { name = "ENVIRONMENT", value = var.environment },
-        { name = "PORT", value = tostring(var.app_port) },
-        # Apps export OTLP to the sidecar over the shared localhost.
-        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4317" },
-        { name = "OTEL_SERVICE_NAME", value = each.key },
-        { name = "OTEL_RESOURCE_ATTRIBUTES", value = "service.name=${each.key},deployment.environment=${var.environment}" },
-      ]
+      environment = concat(
+        [
+          { name = "SERVICE_NAME", value = each.key },
+          { name = "ENVIRONMENT", value = var.environment },
+          { name = "PORT", value = tostring(var.app_port) },
+          # Apps export OTLP to the sidecar over the shared localhost.
+          { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4317" },
+          { name = "OTEL_SERVICE_NAME", value = each.key },
+          { name = "OTEL_RESOURCE_ATTRIBUTES", value = "service.name=${each.key},deployment.environment=${var.environment}" },
+        ],
+        local.service_env[each.key],
+      )
+
+      # Secrets, not environment: these arrive from Secrets Manager at container
+      # start and never appear in the task definition, a plan, or `describe-task-
+      # definition` output. Everything non-sensitive stays in `environment`.
+      secrets = local.service_secrets[each.key]
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -522,6 +530,13 @@ resource "aws_ecs_service" "service" {
       container_name   = each.key
       container_port   = var.app_port
     }
+  }
+
+  # Register tasks in Cloud Map so siblings can resolve them by name
+  # (service-mesh.tf). Without this the DNS record exists but nothing is behind
+  # it, and every internal call fails to resolve.
+  service_registries {
+    registry_arn = aws_service_discovery_service.service[each.key].arn
   }
 
   # Give a new task time to pass health checks before the ALB judges it.

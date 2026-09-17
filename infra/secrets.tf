@@ -67,6 +67,18 @@ resource "aws_secretsmanager_secret_version" "db" {
     host     = aws_db_instance.main.address
     port     = aws_db_instance.main.port
     dbname   = var.db_name
+    # Assembled here so the migration task can inject one secret key as
+    # ADMIN_DATABASE_URL rather than composing a URL from five fields in a shell.
+    # sslmode=require: ADR 0003 sets rds.force_ssl=1, so a plain connection is
+    # refused by the server anyway -- being explicit makes that intentional.
+    database_url = format(
+      "postgresql://%s:%s@%s:%d/%s?sslmode=require",
+      var.db_master_username,
+      urlencode(random_password.db_master.result),
+      aws_db_instance.main.address,
+      aws_db_instance.main.port,
+      var.db_name,
+    )
   })
 }
 
@@ -100,6 +112,8 @@ resource "aws_secretsmanager_secret_version" "daraja" {
     base_url            = "https://sandbox.safaricom.co.ke"
     initiator_name      = "PLACEHOLDER_SET_OUT_OF_BAND"
     security_credential = "PLACEHOLDER_SET_OUT_OF_BAND"
+    # B2C disburses from a separate shortcode to the till that collects.
+    b2c_shortcode = "PLACEHOLDER_SET_OUT_OF_BAND"
   })
 
   lifecycle {
@@ -179,6 +193,37 @@ resource "aws_secretsmanager_secret_version" "service_token" {
 }
 
 # ---------------------------------------------------------------------------
+# devops-g1/jwt — POS signs attendant/owner sessions with this
+#
+# Terraform-generated like the service token: it is an internal signing key with
+# no external counterparty, so there is nothing to coordinate out-of-band.
+# ---------------------------------------------------------------------------
+
+resource "random_password" "jwt" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "jwt" {
+  name        = "${local.prefix}/jwt"
+  description = "JWT signing secret for POS browser sessions"
+  kms_key_id  = aws_kms_key.secrets.arn
+
+  recovery_window_in_days = 0
+
+  tags = {
+    Name    = "${local.prefix}-jwt"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "jwt" {
+  secret_id     = aws_secretsmanager_secret.jwt.id
+  secret_string = jsonencode({ secret = random_password.jwt.result })
+}
+
+# ---------------------------------------------------------------------------
 # Per-service secrets
 #
 # iam.tf grants each exec role GetSecretValue on `${prefix}/${service}/*`.
@@ -251,8 +296,16 @@ resource "aws_secretsmanager_secret" "service_db_password" {
 resource "aws_secretsmanager_secret_version" "service_db_password" {
   for_each = toset(local.services)
 
-  secret_id     = aws_secretsmanager_secret.service_db_password[each.key].id
-  secret_string = jsonencode({ password = "PLACEHOLDER_SET_BY_MIGRATION_JOB" })
+  secret_id = aws_secretsmanager_secret.service_db_password[each.key].id
+
+  # `database_url` as well as `password`: the service reads one value rather
+  # than composing a URL from five, and ECS can inject a single secret key. The
+  # migration job (`--write-secret`) overwrites both once it has created the
+  # role -- `ignore_changes` below is what lets it.
+  secret_string = jsonencode({
+    password     = "PLACEHOLDER_SET_BY_MIGRATION_JOB"
+    database_url = "PLACEHOLDER_SET_BY_MIGRATION_JOB"
+  })
 
   lifecycle {
     ignore_changes = [secret_string]
