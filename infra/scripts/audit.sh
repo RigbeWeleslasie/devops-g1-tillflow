@@ -224,7 +224,10 @@ while IFS=$'\t' read -r arn name_tag; do
     # Identified by generated id -> the Name tag is the name.
     # API Gateway (/apis/k0lz..., /vpclinks/c54l...) and ACM (certificate/uuid)
     # belong here too: the id is server-assigned, so only the tag can carry it.
-    *:ec2:*|*:elasticloadbalancing:*|*:apigateway:*|*:acm:*)
+    # Identified by a generated id, so the Name tag is the only place a name can
+    # live: EC2 (vpc-, subnet-), ELB, API Gateway (/apis/, /vpclinks/), ACM
+    # (certificate/uuid) and Cloud Map (ns-, srv-).
+    *:ec2:*|*:elasticloadbalancing:*|*:apigateway:*|*:acm:*|*:servicediscovery:*)
       if [[ -z "$name_tag" ]]; then
         red "FAIL  no Name tag: $arn"
         name_violations=$((name_violations + 1))

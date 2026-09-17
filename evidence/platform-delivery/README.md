@@ -220,6 +220,62 @@ every ARN (`...:secret:devops-g1/service-token-NPEUKn`), so an exact-match
 resource matches nothing, and the failure surfaces as a task that will not start
 with `AccessDenied` rather than anything naming the cause.
 
+## 5e · Service configuration and the migration job (contract §2–§4)
+
+`evidence/payments-integrity/deployment-contract.md` lists what Payments and
+Commission need to run. All of it is applied.
+
+```bash
+# Every secret arrives with a JSON-key suffix
+aws ecs describe-task-definition --task-definition devops-g1-payments --output json |
+  jq -r '.taskDefinition.containerDefinitions[] | select(.name=="payments")
+         | .secrets[] | "\(.name) -> \(.valueFrom | sub("^.*:secret:"; ""))"'
+```
+
+```
+SERVICE_TOKEN                  -> devops-g1/service-token-NPEUKn:token::
+DATABASE_URL                   -> devops-g1/payments/db-password-Vndt3I:database_url::
+DARAJA_CONSUMER_KEY            -> devops-g1/daraja-KbBIbh:consumer_key::
+... 7 more DARAJA_*
+```
+
+The trailing `:<key>::` is load-bearing. Without it the container receives the
+whole `{"token":"..."}` JSON as its value -- worse than a crash, because the
+service starts cleanly and every internal call 401s.
+
+**Service discovery (§3).** POS calls Payments; Commission calls both. Routing
+that through the internal ALB would send traffic out of a task and back for a
+call that never leaves the VPC, behind the same listener the public edge uses.
+Cloud Map instead: `devops-g1-pos.devops-g1.internal:8080`.
+
+```bash
+aws servicediscovery list-services --filters "Name=NAMESPACE_ID,Values=$NS" \
+  --query 'Services[].Name' --output text
+# devops-g1-pos  devops-g1-payments  devops-g1-commission  devops-g1-web
+```
+
+**Migration job (§4).** A standalone task definition -- `aws ecs run-task`, it
+exits, nothing runs until next time. Deliberately not a pipeline stage: the job
+needs the RDS master credential, and in CI the pipeline role would hold that
+permission permanently. Here only `devops-g1-migrate-task` does, and only while
+a task runs. It also is not per-deploy: a migration must land *before* the code
+that needs it, so coupling it to a deploy is backwards.
+
+```bash
+terraform -chdir=infra output migrate_run_task_command
+```
+
+**The Daraja boundary holds at the IAM layer.** `commission` has no
+`ReadDarajaCredentials` statement on either its exec or its task role -- the one
+layer of the three that still holds if the code is wrong:
+
+```bash
+aws iam get-role-policy --role-name devops-g1-commission-exec \
+  --policy-name devops-g1-commission-exec-secrets \
+  --query 'PolicyDocument.Statement[?Sid==`ReadDarajaCredentials`]' --output text
+# (empty)
+```
+
 ## 6 · Account guard
 
 The workstation's `default` profile points at an unrelated account. The provider
