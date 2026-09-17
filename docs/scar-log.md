@@ -30,7 +30,7 @@ incident or painful surprise. Blameless. Newest first.
      encoding -- so the UI had never actually worked outside of `.inject()`.
   2. A prior change (adding the whole-shilling `CHECK` constraint) edited the ALREADY-
      numbered `001_init.sql` in place instead of adding a new migration file.
-     `scripts/migrate.ts` tracks applied migrations by filename in a `schema_migrations`
+     `src/migrate.ts` tracks applied migrations by filename in a `schema_migrations`
      table, so any database that had already run the original `001_init.sql` would never
      see the edit -- only a database that had never run migrations at all (which is what
      `pg-mem` always is, building fresh every test) would pick it up. Exactly the shape of
@@ -49,13 +49,26 @@ incident or painful surprise. Blameless. Newest first.
   302-to-`/owner` outcome the JSON-payload login test gets, not just "not 415" (a wrong
   status other than 415 would otherwise still pass a weaker assertion). Reverted
   `001_init.sql` to its pre-edit state and added `002_whole_shilling_prices.sql` with the
-  same constraint via `ALTER TABLE ... ADD CONSTRAINT`. Verified independently that the DB
-  constraint is real (not just the pre-existing application-layer check in
-  `tenantService.createProduct`) by inserting directly through `db.query(...)`, bypassing
-  the app layer entirely, and confirming Postgres/pg-mem rejects it.
+  same constraint via `ALTER TABLE ... ADD CONSTRAINT`.
+- **Update (same day, review of the fix itself):** the first version of this fix verified
+  the DB-level constraint by hand (a throwaway `db.query(...)` insert bypassing
+  `tenantService.createProduct`) but committed no test for it -- the PR description said
+  "verified" while the diff's POS test count stayed at 32 before and after. The reviewer
+  deleted `002_whole_shilling_prices.sql` outright and reran the suite: still 32/32, green.
+  Exactly the failure mode this fix exists to prevent, reproduced one level up, by the fix
+  itself. Added `services/pos/test/schema.test.ts` (same pattern as
+  `services/payments/test/schema.test.ts`): a raw `db.query` insert of a fractional price
+  into `products` and into `sale_items`, each asserting `/check|constraint/i`. Deleting
+  `002` now fails 2 of 34 POS tests instead of 0 of 32. Also fixed a second, smaller
+  reviewer catch: this file's `002` header and the paragraph above both still said
+  `scripts/migrate.ts`, which PR #11 moved to `src/migrate.ts` (the runtime image deletes
+  npm and strips devDependencies, so nothing under `scripts/` runs there anymore) --
+  updated both references.
 - **Prevention:** Applied migrations are immutable from here on -- any further schema
   change is a new numbered file, no exceptions, regardless of whether a real database has
-  actually run the old one yet. For the form bug: worth a standing reminder that
+  actually run the old one yet. Every migration that adds a constraint reachable only by
+  bypassing the application layer needs its own `schema.test.ts`-style raw-insert test, not
+  just a claim in the PR description. For the form bug: worth a standing reminder that
   `app.inject({ payload: object })` is not a browser and never proves a `<form>` actually
   works -- every one of `services/web/test/web.test.ts`'s pre-existing tests took the JSON
   path, and none would have failed even with formbody missing entirely.

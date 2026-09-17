@@ -7,7 +7,7 @@
 --
 -- This is a NEW migration, not an edit to 001_init.sql. 001 briefly carried
 -- this inline; that edit never reaches any database that already ran the
--- original 001, because scripts/migrate.ts tracks applied files by name
+-- original 001, because src/migrate.ts tracks applied files by name
 -- (see docs/scar-log.md). Applied migrations are immutable from here on --
 -- any further schema change is a new numbered file, no exceptions.
 --
