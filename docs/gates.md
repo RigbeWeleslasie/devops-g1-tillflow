@@ -50,23 +50,54 @@ Sale → STK callback → paid; close → commission → B2C; state/idempotency 
 - [x] Failure-path tests alongside every success test (timeout → stays `UNPAID`,
       malformed `sale.paid` event left unacked, same-key-different-body → 409, etc.) —
       the "happy path only" blocker specifically
-- [ ] Not yet done: real Postgres/RDS run (tests are pg-mem-backed only), Docker build of
-      either service (`Dockerfile`s written, untested — no Docker available), and
-      integration with a real Payments service (Track B, Nebyat)
+- [x] `GET /internal/daily-close` — the contract the Commission worker reads (per-sale
+      amounts, Nairobi business day, rate + MSISDN resolved as of the close)
+- [x] Integration with a real Payments service — proven, not asserted:
+      `tests/integration/` wires POS and Payments together with only Daraja faked
+      (the `tenantId`/`customerMsisdn` mismatch it caught is in `docs/scar-log.md`)
+- [ ] Not yet done: real Postgres/RDS run (tests are pg-mem-backed only)
 - [ ] Not yet done: deployed to ECS / exercised through the pipeline
 
-### Track B — Payments + integrity (Nebyat): not started in this pass
-See `docs/ownership.md` for the DRI and required invariants (I2–I5).
+### Track B — Payments + integrity (Nebyat): status
+- [x] `services/payments` — sole owner of Daraja. STK push, callbacks, transaction query,
+      B2C, reconciliation; charge and payout state machines; transactional outbox
+      (`sale.paid`); migrations for the `payments` schema
+- [x] `services/commission` — daily close: computes each attendant's commission from
+      confirmed PAID sales, writes the payout ledger, requests B2C **through the Payments
+      API**. No Daraja dependency of any kind
+- [x] `@tillflow/mpesa` — one adapter interface, two implementations: `DarajaAdapter`
+      (sandbox) and `FakeAdapter` (the deterministic scenario table, ADR 0005)
+- [x] I2–I5 proven with real, passing tests — see `evidence/payments-integrity/` for the
+      per-invariant table and the exact command behind every count
+- [x] Failure paths beside every success path: decline, timeout, callback replay and
+      reorder, amount mismatch (hold), unverifiable B2C amount, insufficient float
+- [x] Both G2 flows proven across the real seams in `tests/integration/`:
+      sale → STK callback → paid, and close → commission → B2C
+- [ ] Not yet done: real Postgres/RDS run; Daraja sandbox credentials in
+      `devops-g1/daraja` (the contract test skips without them)
+- [ ] Not yet done: deployed to ECS / exercised through the pipeline
 
 ### Cross-cutting G2 blockers — status
-- **Happy path only:** cleared for Track A (see above). Track B's own failure-path
-  coverage is Nebyat's to prove.
-- **Unsafe money state:** integer minor units end to end, one documented rounding rule
-  (`@tillflow/shared/money`, tested). I2/I3/I5 are Track B's to prove.
-- **Direct Daraja call from Commission:** N/A yet — Commission (`services/commission/`)
-  hasn't been built in this pass; the architectural guarantee (no Daraja creds, Payments
-  is the only caller) is documented in `docs/architecture.md` §3 and enforced at the IAM
-  layer per `infra/iam.tf`, pending the service itself.
+- **Happy path only:** ☑ cleared. Every success path has a failure path beside it on both
+  tracks — decline, timeout, replay, reorder, hold, unverifiable B2C amount, insufficient
+  float, malformed event left unacked, same-key-different-body → 409.
+- **Unsafe money state:** ☑ cleared. Integer minor units end to end; one documented
+  rounding rule (`floor` per sale, then summed — `@tillflow/shared/money`); the remainder
+  is carried on the ledger rather than lost, and `amount = payout + remainder` is asserted
+  across the real seam. I2–I5 additionally hold as **database constraints**, independent
+  of any handler (`services/payments/test/schema.test.ts`).
+- **Direct Daraja call from Commission:** ☑ cleared, structurally. `@tillflow/mpesa` is not
+  a dependency of `services/commission` — its deps are `shared`, `otel`, `pg`, `pino`,
+  `sqs` and nothing else, so the call is not merely discouraged but impossible without a
+  package change. Documented in `docs/architecture.md` §3, enforced at the IAM layer in
+  `infra/iam.tf` (no Daraja secret grant), and proven in `evidence/payments-integrity/`.
+
+### G2 — how to reproduce
+```bash
+npm ci && npm test        # 214 tests across 7 workspaces, 0 failing
+```
+Per-area detail and per-invariant commands: `evidence/payments-integrity/`,
+`evidence/product-pos/`.
 
 ## G3 — Operate (D11)
 Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
