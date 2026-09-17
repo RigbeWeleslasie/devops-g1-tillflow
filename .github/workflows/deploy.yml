@@ -76,10 +76,10 @@ jobs:
       - name: terraform plan
         run: |
           terraform -chdir=infra plan -input=false -no-color \
-            -var 'service_images={}' -out=tfplan
+            -lock-timeout=5m -var 'service_images={}' -out=tfplan
 
       - name: terraform apply
-        run: terraform -chdir=infra apply -input=false -no-color tfplan
+        run: terraform -chdir=infra apply -input=false -no-color -lock-timeout=5m tfplan
 
       - name: Naming + tag audit (gate)
         run: ./infra/scripts/audit.sh
