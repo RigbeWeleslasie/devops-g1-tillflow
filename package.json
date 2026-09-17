@@ -8,7 +8,8 @@
     "services/pos",
     "services/payments",
     "services/commission",
-    "services/web"
+    "services/web",
+    "tests/integration"
   ],
   "engines": {
     "node": ">=22"

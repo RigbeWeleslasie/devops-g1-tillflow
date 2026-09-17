@@ -41,7 +41,12 @@ RUN npm run build --workspace=@tillflow/shared && \
 # Production-only node_modules, in their own stage so the runtime image
 # never carries devDependencies (typescript, tsx, pg-mem, @types/*).
 FROM deps AS prod-deps
-RUN npm ci --workspace=@tillflow/shared --workspace=@tillflow/pos --include-workspace-root --omit=dev
+RUN npm ci --workspace=@tillflow/shared --workspace=@tillflow/pos --include-workspace-root --omit=dev && \
+    mkdir -p services/pos/node_modules
+# npm hoists workspace deps to the root node_modules; a per-workspace
+# node_modules only exists when a version conflicts with the hoisted one.
+# The mkdir guarantees the runtime COPY below has a source either way
+# (a COPY of a missing path fails the build).
 
 # ---------------------------------------------------------------------------
 # runtime
@@ -67,7 +72,6 @@ ENV NODE_ENV=production \
     OTEL_SERVICE_NAME=pos
 
 COPY --from=prod-deps /app/node_modules ./node_modules/
-COPY --from=prod-deps /app/services/_shared/ts/node_modules services/_shared/ts/node_modules/
 COPY --from=prod-deps /app/services/pos/node_modules services/pos/node_modules/
 COPY --from=build /app/services/_shared/ts/dist services/_shared/ts/dist/
 COPY --from=build /app/services/pos/dist services/pos/dist/
