@@ -103,6 +103,40 @@ test('sale creation -> pay flow renders the sale status page', async (t) => {
   assert.equal(payRes.statusCode, 302);
 });
 
+test('a real browser form POST (urlencoded, not JSON) is parsed and logs in, not rejected with 415', async (t) => {
+  const { app } = await withApps(t);
+
+  // Bootstrap still goes through as JSON here (app.inject's default for an
+  // object payload) -- the point of this test is specifically that a form
+  // submission, which a real <form method="post"> sends as
+  // application/x-www-form-urlencoded, is accepted by /login. Every other
+  // test in this file sends JSON via inject's object payload, which is
+  // exactly why the missing @fastify/formbody registration went unnoticed:
+  // it never exercised the content type a browser actually uses.
+  const setupRes = await app.inject({
+    method: 'POST',
+    url: '/setup',
+    payload: {
+      name: 'Test Shop',
+      tillNumber: '123456',
+      ownerExternalAuthId: 'owner-1',
+      ownerDisplayName: 'Owner One',
+    },
+  });
+  assert.equal(setupRes.statusCode, 302);
+
+  const loginRes = await app.inject({
+    method: 'POST',
+    url: '/login',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: 'tenantId=whatever&externalAuthId=owner-1',
+  });
+
+  assert.notEqual(loginRes.statusCode, 415);
+  assert.equal(loginRes.statusCode, 302, 'a real form POST must log in exactly like the JSON-payload one does');
+  assert.equal(loginRes.headers.location, '/owner');
+});
+
 test('unauthenticated access to /owner redirects to /login rather than leaking data', async (t) => {
   const { app } = await withApps(t);
   const res = await app.inject({ method: 'GET', url: '/owner' });
