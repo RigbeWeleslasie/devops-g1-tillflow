@@ -161,6 +161,10 @@ resource "aws_vpc_security_group_egress_rule" "migrate_to_rds" {
   }
 }
 
+# Accepted risk: same rationale as the service egress rule in ecs.tf -- the task
+# needs Secrets Manager, ECR and CloudWatch Logs, which have no stable CIDR, and
+# this is 443 only. Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0104
 resource "aws_vpc_security_group_egress_rule" "migrate_https" {
   security_group_id = aws_security_group.migrate.id
   from_port         = 443
@@ -202,6 +206,22 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_migrate" {
 #
 # `commission` has no migration: it shares the payments schema and role (ADR
 # 0003). `web` has no database at all.
+#
+# Accepted risk: AWS-0036 matches on the env var NAME `DB_SECRET_PREFIX`, never
+# on its value -- which is `devops-g1`, the resource prefix printed in every ARN
+# in this repo. The one genuinely sensitive input, ADMIN_DATABASE_URL, is in
+# `secrets` (resolved from Secrets Manager at container start), never in
+# `environment`: exactly the distinction this rule exists to enforce.
+#
+# Renaming was tried first and is worse: the migrator's other accepted variable,
+# DB_PASSWORD_SECRET_ID, trips the same pattern harder, and an inline ignore does
+# not work because Trivy attributes the finding to the whole resource block.
+#
+# The suppression is resource-wide, so it WOULD also hide a real plaintext secret
+# added to `environment` later. `infra/scripts/audit.sh --env-secrets` closes
+# that hole with a narrower check; the IaC scan alone no longer covers it here.
+# Owner: meron. Expiry: G5.
+# trivy:ignore:AVD-AWS-0036
 resource "aws_ecs_task_definition" "migrate" {
   for_each = toset(["pos", "payments"])
 
@@ -244,10 +264,9 @@ resource "aws_ecs_task_definition" "migrate" {
       { name = "ENVIRONMENT", value = var.environment },
       { name = "AWS_REGION", value = var.aws_region },
       # No trailing slash: the migrator builds `${prefix}/${APP_SERVICE}/db-password`
-      # itself (services/*/src/migrate.ts), so "devops-g1/" would resolve to
-      # `devops-g1//pos/db-password` -- a secret that does not exist. The write
-      # then fails and `database_url` is never populated, which is the one key
-      # every task definition injects.
+      # from this (services/*/src/migrate.ts), so "devops-g1/" would resolve to
+      # `devops-g1//pos/db-password` -- a secret that does not exist, so the write
+      # fails and `database_url` is never populated.
       { name = "DB_SECRET_PREFIX", value = local.prefix },
       { name = "APP_SERVICE", value = each.key },
       { name = "APP_SCHEMA", value = each.key },

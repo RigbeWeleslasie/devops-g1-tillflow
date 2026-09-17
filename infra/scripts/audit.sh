@@ -74,6 +74,60 @@ echo "Prefix  : $PREFIX"
 echo
 
 # ---------------------------------------------------------------------------
+# --env-secrets: no plaintext credential in any task definition's `environment`
+#
+# `migrate.tf` carries a resource-wide `trivy:ignore:AVD-AWS-0036` -- the rule
+# matches the NAME `DB_SECRET_PREFIX` and cannot be scoped to one line. That
+# suppression would also hide a genuine plaintext secret added to `environment`
+# later, so this check covers the gap directly: it reads the LIVE task
+# definitions and looks at values, which is what the rule was standing in for.
+#
+# A value that looks like a credential fails. A name that merely sounds like one
+# does not -- that is the false positive being worked around.
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "--env-secrets" ]]; then
+  echo "== Plaintext secrets in task definition environment =="
+
+  bad=0
+  for fam in $(aws ecs list-task-definition-families --region "$REGION" \
+                 --family-prefix "$PREFIX" --status ACTIVE \
+                 --query 'families[]' --output text 2>/dev/null); do
+    findings="$(aws ecs describe-task-definition --region "$REGION" \
+      --task-definition "$fam" --output json 2>/dev/null |
+      jq -r '
+        .taskDefinition.containerDefinitions[]
+        | .name as $c
+        | (.environment // [])[]
+        | select(
+            # A JDBC/postgres URL with credentials in it, a PEM block, an AWS
+            # key id, or a long high-entropy value -- things that ARE secrets,
+            # as opposed to names that merely read like one.
+            (.value | test("://[^/@:]+:[^/@]+@"))
+            or (.value | test("BEGIN [A-Z ]*PRIVATE KEY"))
+            or (.value | test("^(AKIA|ASIA)[A-Z0-9]{16}$"))
+            or ((.name | test("(?i)password|secret_key|private_key|token$"))
+                and (.value | length) > 20
+                and (.value | test("^[A-Za-z0-9+/=_-]+$")))
+          )
+        | "\($c): \(.name)"
+      ')"
+
+    if [[ -n "$findings" ]]; then
+      red "FAIL  $fam"
+      sed 's/^/        /' <<<"$findings"
+      bad=$((bad + 1))
+    fi
+  done
+
+  if ((bad == 0)); then
+    green "PASS  no plaintext credentials in any task definition environment."
+    exit 0
+  fi
+  red "FAIL  $bad task definition(s) carry a credential in plaintext."
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Tag audit — via the Resource Groups Tagging API, which sees every taggable
 # resource at once rather than per-service describe calls.
 # ---------------------------------------------------------------------------
