@@ -140,14 +140,69 @@ jobs:
 
       - name: Smoke the image (health/ready/version)
         run: |
+          # Every real service's loadConfig()/requireEnv() throws on a
+          # missing required var and the process dies before Fastify/http
+          # ever binds a port -- correct, fail-fast behaviour for an actual
+          # deployment, but it means this probe (which set only SERVICE_NAME
+          # and COMMIT_SHA) was silently smoke-testing a container that
+          # exited on startup: `docker run -d` succeeds regardless, so
+          # nothing here failed until curl found no listener at all.
+          # /health never touches any of this (db.ts's Pool connects lazily;
+          # HTTP clients just store a base URL), so a syntactically valid
+          # but unreachable value is enough to get the process listening.
+          #
+          # payments and commission additionally run a real `SELECT 1` in
+          # /ready (correct: their readiness IS "can I reach the DB"), which
+          # an unreachable DATABASE_URL will legitimately fail -- there is no
+          # real Postgres in this job. That means the /ready assertion below
+          # can still fail for those two even with valid-shaped env; giving
+          # them one needs an ephemeral Postgres service container wired to
+          # the probe's network, which is a real, separate change, not
+          # something to paper over here. pos and web don't check a
+          # dependency in /ready yet, so they're fully covered by env alone.
+          smoke_env=(-e SERVICE_NAME=${{ matrix.service }} -e COMMIT_SHA=${{ github.sha }})
+          case "${{ matrix.service }}" in
+            pos)
+              smoke_env+=(
+                -e DATABASE_URL=postgres://smoke:smoke@localhost:5432/smoke
+                -e JWT_SECRET=ci-smoke-test-secret
+                -e PAYMENTS_BASE_URL=http://localhost:1
+                -e SERVICE_TOKEN=ci-smoke-test-token
+              )
+              ;;
+            web)
+              smoke_env+=(-e POS_BASE_URL=http://localhost:1)
+              ;;
+            payments)
+              smoke_env+=(
+                -e DATABASE_URL=postgres://smoke:smoke@localhost:5432/smoke
+                -e SERVICE_TOKEN=ci-smoke-test-token
+                -e MPESA_CALLBACK_BASE_URL=http://localhost:1
+              )
+              ;;
+            commission)
+              smoke_env+=(
+                -e DATABASE_URL=postgres://smoke:smoke@localhost:5432/smoke
+                -e SERVICE_TOKEN=ci-smoke-test-token
+                -e POS_BASE_URL=http://localhost:1
+                -e PAYMENTS_BASE_URL=http://localhost:1
+              )
+              ;;
+          esac
+
           docker run -d --name probe --read-only -p 18080:8080 \
-            -e SERVICE_NAME=${{ matrix.service }} \
-            -e COMMIT_SHA=${{ github.sha }} \
+            "${smoke_env[@]}" \
             ${{ matrix.service }}:${{ github.sha }}
           for i in $(seq 1 20); do
             if curl -fsS localhost:18080/health >/dev/null 2>&1; then break; fi
             sleep 1
           done
+          # Always shown, not just on failure: the previous version of this
+          # step gave no way to tell "crashed at boot" from "slow to start"
+          # apart from re-deriving it the way this comment block just did.
+          echo "::group::docker logs probe"
+          docker logs probe || true
+          echo "::endgroup::"
           curl -fsS localhost:18080/health  | tee /dev/stderr | jq -e '.status=="ok"'
           curl -fsS localhost:18080/ready   | tee /dev/stderr | jq -e '.status=="ready"'
           curl -fsS localhost:18080/version | tee /dev/stderr | jq -e '.sha=="${{ github.sha }}"'
