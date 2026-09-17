@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Payments migration runner — the "migration job" infra/secrets.tf refers to
- * for the `payments` schema. Same pattern as services/pos/scripts/migrate.ts
+ * for the `payments` schema. Same pattern as services/pos/src/migrate.ts
  * (Rigbe's), parameterised for this schema; kept per-service rather than
  * shared so each service stays independently deployable.
  *
@@ -18,8 +18,12 @@
  *     password.
  *
  * Usage:
- *   ADMIN_DATABASE_URL=postgres://... npx tsx scripts/migrate.ts
- *   ADMIN_DATABASE_URL=postgres://... npx tsx scripts/migrate.ts --write-secret
+ *   ADMIN_DATABASE_URL=postgres://... npm run migrate --workspace=@tillflow/payments
+ *   ADMIN_DATABASE_URL=postgres://... npm run migrate --workspace=@tillflow/payments -- --write-secret
+ *
+ * In the built image it is `node dist/migrate.js` (npm run migrate:dist): the
+ * runtime image deletes npm and strips devDependencies, so neither npm nor tsx
+ * exists there. infra/migrate.tf runs exactly that.
  */
 import pg from 'pg';
 import crypto from 'node:crypto';

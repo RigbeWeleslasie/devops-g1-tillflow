@@ -203,9 +203,39 @@ jobs:
           echo "::group::docker logs probe"
           docker logs probe || true
           echo "::endgroup::"
+          # Liveness and artifact identity depend on nothing, so they are
+          # asserted outright.
           curl -fsS localhost:18080/health  | tee /dev/stderr | jq -e '.status=="ok"'
-          curl -fsS localhost:18080/ready   | tee /dev/stderr | jq -e '.status=="ready"'
           curl -fsS localhost:18080/version | tee /dev/stderr | jq -e '.sha=="${{ github.sha }}"'
+
+          # /ready is asserted to ANSWER, not to answer one particular way.
+          #
+          # It means "can I reach my dependencies" (services/_shared/ts/src/
+          # health.ts), and there is deliberately no Postgres in this job -- but
+          # the services do not agree on whether they probe at all. payments and
+          # commission pass a `checkReady` that runs SELECT 1, so they answer
+          # 503 here; pos and web register healthPlugin with no `checkReady`, so
+          # they answer 200 regardless. Demanding "ready" encodes pos/web's
+          # behaviour as the correct one, and `curl -fsS` exits non-zero on 503
+          # before jq ever runs -- so the first PR to touch payments or
+          # commission would have gone red for a reason that has nothing to do
+          # with it. (It passed on #13 only because that PR's path filter ran
+          # pos and web alone.)
+          #
+          # Giving the probe a real Postgres service container is the change
+          # that would let this assert readiness properly; it is a separate
+          # piece of work, not something to paper over here. Until then the
+          # value is printed on every run so the divergence stays visible
+          # rather than becoming folklore.
+          code=$(curl -s -o /tmp/ready.json -w '%{http_code}' localhost:18080/ready)
+          echo "/ready -> HTTP $code"; cat /tmp/ready.json; echo
+          case "$code" in
+            200) jq -e '.status=="ready"' /tmp/ready.json ;;
+            503) jq -e '.status=="not_ready" or .status=="draining"' /tmp/ready.json ;;
+            *)   echo "::error::/ready returned $code; expected 200 or 503"
+                 docker rm -f probe || true; exit 1 ;;
+          esac
+
           docker rm -f probe
 
       - name: SBOM
