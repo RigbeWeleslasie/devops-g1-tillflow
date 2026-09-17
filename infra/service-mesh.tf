@@ -144,7 +144,12 @@ locals {
   mpesa_callback_base_url = "${aws_apigatewayv2_api.main.api_endpoint}/payments"
 
   service_env = {
-    web = []
+    # `services/web/src/server.ts` does requireEnv('POS_BASE_URL') -- the shell
+    # proxies every call to the POS API, so it cannot start without it. Invisible
+    # today only because web sits at desired_count 0.
+    web = [
+      { name = "POS_BASE_URL", value = local.service_url["pos"] },
+    ]
 
     pos = [
       { name = "PAYMENTS_BASE_URL", value = local.service_url["payments"] },

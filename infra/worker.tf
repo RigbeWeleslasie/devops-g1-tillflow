@@ -48,9 +48,22 @@ resource "aws_ecs_task_definition" "pos_worker" {
         initProcessEnabled = true
       }
 
-      # No portMappings and no load balancer: it consumes a queue and serves
-      # nothing. It still answers /health and /ready on var.app_port, which is
-      # what the container health check below uses.
+      # No portMappings, no load balancer, and -- deliberately -- no health check.
+      #
+      # `services/pos/src/worker.ts` starts no HTTP server: it constructs an SQS
+      # event source and calls runForever. An HTTP probe against it would fail
+      # every interval, ECS would kill the container, and the circuit breaker
+      # would roll the deploy back. A container with no health check is healthy
+      # while its process runs, which is the right semantics for a queue consumer.
+      #
+      # This differs from `commission`, whose worker DOES pass a probe -- because
+      # `services/commission/src/health.ts` exists and its worker calls
+      # `createHealthServer(...).listen()`. Copying commission's task definition
+      # without that file is what made this wrong.
+      #
+      # Restore the probe when POS's worker grows the same health server (Rigbe's
+      # file, tracked separately); it also gives the worker /version artifact
+      # identity, which the brief asks for.
       environment = [
         { name = "SERVICE_NAME", value = "pos-worker" },
         { name = "ENVIRONMENT", value = var.environment },
@@ -78,13 +91,6 @@ resource "aws_ecs_task_definition" "pos_worker" {
         }
       }
 
-      healthCheck = {
-        command     = ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:${var.app_port}/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 10
-      }
     },
 
     # Same ADOT sidecar as every other task: a queue consumer's traces are the
@@ -140,14 +146,17 @@ resource "aws_ecs_service" "pos_worker" {
   # time, and the sale.paid handler is idempotent on sale_id, so a second task
   # would add redelivery races for no throughput at this volume. Revisit if k6
   # shows the queue backing up (G3).
-  # 0 until the POS image actually contains `dist/worker.js`.
+  # The INITIAL count only. `desired_count` is in `ignore_changes` below, so this
+  # is read once at create and never again -- flipping `pos_worker_enabled` on an
+  # existing service does nothing. Scaling it up afterwards is:
   #
-  # The image currently deployed to `pos` is the shared reference app (a single
-  # app.js with no worker), so starting this now would crash-loop every task and
-  # produce a red service that proves nothing. `var.pos_worker_enabled` flips it
-  # on in the same change that deploys a POS image built from services/pos --
-  # deliberately explicit rather than inferred, because "an image exists" is not
-  # "that image has a worker in it".
+  #   aws ecs update-service --cluster devops-g1 \
+  #     --service devops-g1-pos-worker --desired-count 1
+  #
+  # 0 by default because the image deployed to `pos` today is the shared
+  # reference app, which has no `dist/worker.js`: starting it would crash-loop
+  # every task and produce a red service that proves nothing. "An image exists"
+  # is not "that image contains a worker", so this stays an explicit decision.
   desired_count = var.pos_worker_enabled && local.service_image["pos"] != "" ? 1 : 0
 
   deployment_circuit_breaker {

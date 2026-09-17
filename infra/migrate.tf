@@ -193,8 +193,19 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_migrate" {
 
 # --- task definition -------------------------------------------------------
 
+# One task definition per migrated service.
+#
+# `containerOverrides` has no image field, so a single definition pinned to the
+# POS image could never run the Payments migration -- the schema and role would
+# never be created, and payments and commission would never start. Each service's
+# migrations ship inside its own image, so each needs its own definition.
+#
+# `commission` has no migration: it shares the payments schema and role (ADR
+# 0003). `web` has no database at all.
 resource "aws_ecs_task_definition" "migrate" {
-  family                   = "${local.prefix}-migrate"
+  for_each = toset(["pos", "payments"])
+
+  family                   = "${local.prefix}-migrate-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 512
@@ -210,25 +221,32 @@ resource "aws_ecs_task_definition" "migrate" {
   container_definitions = jsonencode([{
     name = "migrate"
 
-    # Runs the service's own image -- the migrations ship inside it, so the
-    # schema applied always matches the code that will read it. `--overrides` on
-    # run-task selects which service and supplies the command.
-    image     = local.service_image["pos"] != "" ? local.service_image["pos"] : local.placeholder_image
+    # The service's OWN image -- the migrations ship inside it, so the schema
+    # applied always matches the code that will read it.
+    image     = local.service_image[each.key] != "" ? local.service_image[each.key] : local.placeholder_image
     essential = true
 
-    # Overridden per invocation; a no-op default so a bare run-task does nothing
-    # destructive. The real command is `node dist/migrate.js --write-secret`
-    # with APP_SERVICE / APP_SCHEMA / APP_ROLE supplied per run -- see
-    # `migrate_run_task_command` below and docs/runbook.md.
-    command = ["node", "-e", "console.log('pass --overrides to select a service; see docs/runbook.md')"]
+    # `node dist/migrate.js`, not npm: the runtime image deletes npm/yarn and
+    # strips devDependencies, so neither npm nor tsx exists in it. The migrator
+    # lives in src/ and compiles into dist/, which the image already copies.
+    #
+    # No override needed -- each definition already knows which service it is, so
+    # `run-task` with no `--overrides` does the right thing.
+    command = ["node", "dist/migrate.js", "--write-secret"]
 
     user                   = "1000:1000"
     readonlyRootFilesystem = true
 
+    # APP_SERVICE / APP_SCHEMA / APP_ROLE are baked in rather than passed per
+    # invocation: they are a property of which image this is, not of the run.
+    # `commission` shares the payments schema and role, so it appears nowhere.
     environment = [
       { name = "ENVIRONMENT", value = var.environment },
       { name = "AWS_REGION", value = var.aws_region },
       { name = "DB_SECRET_PREFIX", value = "${local.prefix}/" },
+      { name = "APP_SERVICE", value = each.key },
+      { name = "APP_SCHEMA", value = each.key },
+      { name = "APP_ROLE", value = "${local.prefix}-${each.key}-app" },
     ]
 
     secrets = [
@@ -247,39 +265,29 @@ resource "aws_ecs_task_definition" "migrate" {
   }])
 
   tags = {
-    Name    = "${local.prefix}-migrate"
-    service = "platform"
-    owner   = "meron"
+    Name    = "${local.prefix}-migrate-${each.key}"
+    service = each.key
+    owner   = local.service_owner[each.key]
   }
 }
 
 output "migrate_run_task_command" {
-  description = "Copy-paste for the runbook: run one service's migrations."
+  description = "Copy-paste for the runbook: run each service's migrations once."
 
-  # `node dist/migrate.js`, not npm: the runtime image deletes npm/yarn and
-  # strips devDependencies, so neither npm nor tsx exists in it. The migrator
-  # lives in src/ and compiles into dist/, which the image already copies.
+  # One command per service, because each runs its own image. APP_SERVICE,
+  # APP_SCHEMA and APP_ROLE are already in the task definition, so no
+  # `--overrides` is needed -- which also means there is no way to run the wrong
+  # migration against the wrong image by fumbling a flag.
   #
-  # APP_SERVICE / APP_SCHEMA / APP_ROLE are read by the migrator, so one task
-  # definition covers both services -- but only for images that contain both
-  # migrators. `containerOverrides` has no image field, so a POS image cannot run
-  # the Payments migration: run each against a task definition built from its own
-  # image, or from one image carrying both.
-  value = <<-EOT
-    # POS
-    aws ecs run-task \
-      --cluster ${aws_ecs_cluster.main.name} \
-      --task-definition ${aws_ecs_task_definition.migrate.family} \
-      --launch-type FARGATE \
-      --network-configuration 'awsvpcConfiguration={subnets=[${join(",", [for s in aws_subnet.private : s.id])}],securityGroups=[${aws_security_group.migrate.id}],assignPublicIp=DISABLED}' \
-      --overrides '{"containerOverrides":[{"name":"migrate",
-        "command":["node","dist/migrate.js","--write-secret"],
-        "environment":[{"name":"APP_SERVICE","value":"pos"},
-                       {"name":"APP_SCHEMA","value":"pos"},
-                       {"name":"APP_ROLE","value":"${local.prefix}-pos-app"}]}]}'
-
-    # Payments (commission shares this schema and role -- no separate run)
-    # ... same, with APP_SERVICE=payments, APP_SCHEMA=payments,
-    #     APP_ROLE=${local.prefix}-payments-app
-  EOT
+  # Commission needs no run of its own: it shares the payments schema and role.
+  value = join("\n\n", [
+    for s in ["pos", "payments"] : <<-CMD
+      # ${s}
+      aws ecs run-task \
+        --cluster ${aws_ecs_cluster.main.name} \
+        --task-definition ${aws_ecs_task_definition.migrate[s].family} \
+        --launch-type FARGATE \
+        --network-configuration 'awsvpcConfiguration={subnets=[${join(",", [for sn in aws_subnet.private : sn.id])}],securityGroups=[${aws_security_group.migrate.id}],assignPublicIp=DISABLED}'
+    CMD
+  ])
 }

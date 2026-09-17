@@ -215,10 +215,17 @@ three services must present the *same* value: a per-service secret would
 guarantee drift. `web` is excluded deliberately -- it is a browser-facing shell
 and never makes an authenticated service-to-service call.
 
-The grant needs a trailing `-*`. Secrets Manager appends a random suffix to
-every ARN (`...:secret:devops-g1/service-token-NPEUKn`), so an exact-match
-resource matches nothing, and the failure surfaces as a task that will not start
-with `AccessDenied` rather than anything naming the cause.
+Secrets Manager appends a random suffix to every ARN
+(`...:secret:devops-g1/service-token-NPEUKn`), so a hand-written
+`devops-g1/service-token` matches nothing and the task fails at boot with
+`AccessDenied` -- an error that names nothing useful.
+
+The grant therefore uses `aws_secretsmanager_secret.service_token.arn`, which
+already carries the real suffix. A `-*` wildcard would also work, and was the
+first attempt, but it would additionally match a future
+`devops-g1/service-token-admin` and silently grant it to all three services. The
+resource attribute is exact and cannot drift -- the same pattern the task-role
+grants in `data.tf` use.
 
 ## 5e · Service configuration and the migration job (contract §2–§4)
 
@@ -254,12 +261,19 @@ aws servicediscovery list-services --filters "Name=NAMESPACE_ID,Values=$NS" \
 # devops-g1-pos  devops-g1-payments  devops-g1-commission  devops-g1-web
 ```
 
-**Migration job (§4).** A standalone task definition -- `aws ecs run-task`, it
-exits, nothing runs until next time. Deliberately not a pipeline stage: the job
-needs the RDS master credential, and in CI the pipeline role would hold that
-permission permanently. Here only `devops-g1-migrate-task` does, and only while
-a task runs. It also is not per-deploy: a migration must land *before* the code
-that needs it, so coupling it to a deploy is backwards.
+**Migration job (§4).** Standalone task definitions -- `aws ecs run-task`, they
+exit, nothing runs until next time. One per migrated service (`pos`,
+`payments`), because each runs its own image and `containerOverrides` has no
+image field: a single definition pinned to one image could never migrate the
+other. `commission` shares the payments schema and role, so it has no run of its
+own.
+
+Deliberately not a pipeline stage: the job needs the RDS master credential, and
+in CI the pipeline role would hold that permission permanently. Here only
+`devops-g1-migrate-exec` can read it -- the ECS agent injects it at container
+start -- and only while a task runs; `devops-g1-migrate-task` is scoped to
+writing the per-service DB secrets. It also is not per-deploy: a migration must
+land *before* the code that needs it, so coupling it to a deploy is backwards.
 
 ```bash
 terraform -chdir=infra output migrate_run_task_command

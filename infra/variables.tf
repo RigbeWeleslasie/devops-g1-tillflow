@@ -158,8 +158,11 @@ variable "pos_worker_enabled" {
 
     Off until the POS image contains `dist/worker.js`. The image deployed today
     is the shared reference app, which does not -- so enabling this before a real
-    POS build would crash-loop the service. Flip it on in the same change that
-    deploys an image built from services/pos.
+    POS build would crash-loop the service.
+
+    This sets the INITIAL count only: the service has `desired_count` in
+    `ignore_changes`, so on an already-created service the switch is
+    `aws ecs update-service --desired-count 1`, not this variable.
   EOT
   type        = bool
   default     = false
