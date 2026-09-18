@@ -334,10 +334,20 @@ variable "canary_target_services" {
 
 variable "canary_schedule_expression" {
   description = <<-EOT
-    How often the external probe runs. One minute is the tightest Synthetics
-    allows and gives the SLO's 28-day window ~40,320 samples, enough for the
-    0.1% web target to be measurable rather than nominal.
+    How often the external probe runs. One minute gives the SLO's 28-day
+    window ~40,320 samples, enough for the 0.1% web target to be measurable
+    rather than nominal.
   EOT
   type        = string
   default     = "rate(1 minute)"
+}
+
+variable "grafana_url" {
+  description = <<-EOT
+    Base URL of the Grafana workspace, injected into every Slack alert as the
+    contract's "Grafana panel link" field. Empty until AMG is provisioned;
+    the renderer then says so instead of linking nowhere.
+  EOT
+  type        = string
+  default     = ""
 }

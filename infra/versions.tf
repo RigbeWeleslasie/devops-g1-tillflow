@@ -14,9 +14,8 @@ terraform {
       version = "~> 3.6"
     }
 
-    # Packages the Synthetics canary script (observability.tf) into the zip
-    # layout the nodejs runtime requires. Built at plan time so the probe's
-    # source stays reviewable as plain JS in infra/canary/ rather than a blob.
+    # Zips the uptime probe and Slack renderer (observability.tf) at plan time
+    # so the source stays reviewable as plain files in infra/alerting/.
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.4"

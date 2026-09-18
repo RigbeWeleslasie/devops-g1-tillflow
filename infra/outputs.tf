@@ -77,3 +77,13 @@ output "alb_dns_name" {
   description = "Internal ALB DNS (reachable only from inside the VPC)."
   value       = aws_lb.main.dns_name
 }
+
+output "uptime_canary_name" {
+  description = "External uptime probe Lambda (outside the VPC). Publishes CloudWatchSynthetics/SuccessPercent."
+  value       = aws_lambda_function.uptime.function_name
+}
+
+output "alerts_topic_arn" {
+  description = "SNS topic every G3 alarm publishes to (firing and recovery)."
+  value       = aws_sns_topic.alerts.arn
+}

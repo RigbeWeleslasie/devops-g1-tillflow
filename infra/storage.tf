@@ -293,27 +293,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
       days_after_initiation = 7
     }
   }
-
-  # Synthetics canary artifacts (observability.tf). Must live here, not as a
-  # second aws_s3_bucket_lifecycle_configuration on the same bucket -- AWS
-  # allows one lifecycle document per bucket, so a sibling resource would
-  # replace this one and drop the ALB-log expiry.
-  rule {
-    id     = "canary-artifacts"
-    status = "Enabled"
-
-    filter {
-      prefix = "canary/"
-    }
-
-    expiration {
-      days = 30
-    }
-
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
 }
 
 # ELB access-log delivery grant.
