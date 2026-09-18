@@ -1,7 +1,7 @@
 -- Payments schema — devops-g1 / TillFlow
 -- DRI: Nebyat (Payments + integrity). See docs/adr/0006-idempotency-and-replay.md.
 --
--- Runs inside the `payments` schema (created by scripts/migrate.ts before this
+-- Runs inside the `payments` schema (created by src/migrate.ts before this
 -- file, per ADR 0003: one schema + one least-privilege role per service). The
 -- commission worker shares this schema and role — the payout ledger is an
 -- integrity concern owned here (docs/architecture.md §3).

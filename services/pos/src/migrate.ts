@@ -14,8 +14,12 @@
  *     connects as devops-g1-pos-app, scoped to the `pos` schema alone.
  *
  * Usage:
- *   ADMIN_DATABASE_URL=postgres://... npx tsx scripts/migrate.ts
- *   ADMIN_DATABASE_URL=postgres://... npx tsx scripts/migrate.ts --write-secret
+ *   ADMIN_DATABASE_URL=postgres://... npm run migrate --workspace=@tillflow/pos
+ *   ADMIN_DATABASE_URL=postgres://... npm run migrate --workspace=@tillflow/pos -- --write-secret
+ *
+ * In the built image it is `node dist/migrate.js` (npm run migrate:dist): the
+ * runtime image deletes npm and strips devDependencies, so neither npm nor tsx
+ * exists there. infra/migrate.tf runs exactly that.
  */
 import pg from 'pg';
 import crypto from 'node:crypto';
