@@ -24,6 +24,7 @@ import {
 } from '@tillflow/mpesa';
 import type { Db } from '../db.js';
 import { isUniqueViolation } from '../db.js';
+import { recordCommand } from '../metrics.js';
 import { rowToCharge, type Charge, type ChargeRow } from '../types.js';
 
 export class ValidationError extends Error {
@@ -145,7 +146,13 @@ export async function createCharge(
 
   // Fast path: already exists. No push, no write.
   const existing = await getChargeBySaleId(db, input.saleId);
-  if (existing) return { charge: existing, created: false };
+  if (existing) {
+    // I2 holding, as a number. Counted here and not at the route so that the
+    // /charges handler and any future caller of createCharge report it the
+    // same way.
+    recordCommand('stk', 'idempotent');
+    return { charge: existing, created: false };
+  }
 
   // Insert PENDING first, in its own short transaction, so that a concurrent
   // request for the same sale hits UNIQUE(sale_id) here — before either of
@@ -162,7 +169,10 @@ export async function createCharge(
     if (isUniqueViolation(err)) {
       // The other request won. Return what it created; it owns the push.
       const winner = await getChargeBySaleId(db, input.saleId);
-      if (winner) return { charge: winner, created: false };
+      if (winner) {
+        recordCommand('stk', 'idempotent');
+        return { charge: winner, created: false };
+      }
     }
     throw err;
   }
@@ -210,6 +220,10 @@ export async function pushStk(chargeId: string, input: CreateChargeInput, opts: 
         err instanceof Error ? `${err.name}: ${err.message}` : String(err),
         now().toISOString(),
       ]);
+      // Not an error in the SLI: the SLO scores a timeout by whether we held
+      // it PENDING and later reconciled it, which payments_reconcile_total
+      // answers. Scoring it here would double-count the same uncertainty.
+      recordCommand('stk', 'uncertain');
       return;
     }
     if (err instanceof MpesaRejectedError) {
@@ -221,6 +235,7 @@ export async function pushStk(chargeId: string, input: CreateChargeInput, opts: 
          WHERE id = $1 AND status = 'PENDING'`,
         [chargeId, Number(err.responseCode) || null, `rejected: ${err.message}`, ts],
       );
+      recordCommand('stk', 'rejected');
       return;
     }
     throw err;
@@ -242,7 +257,10 @@ export async function pushStk(chargeId: string, input: CreateChargeInput, opts: 
     [chargeId, ack.merchantRequestId, ack.checkoutRequestId, now().toISOString()],
   );
 
-  if (claimed.rowCount === 0) {
+  if (claimed.rowCount !== 0) {
+    recordCommand('stk', 'accepted');
+  } else {
+    recordCommand('stk', 'late_ack');
     // The ack arrived too late to be useful. Record it rather than discard
     // it: two provider references for one charge is exactly the kind of
     // thing an operator needs to see, and stkQuery can still be run against

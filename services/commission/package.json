@@ -25,6 +25,7 @@
   "devDependencies": {
     "@types/node": "22.20.2",
     "@types/pg": "8.23.1",
+    "@opentelemetry/sdk-metrics": "2.11.0",
     "typescript": "5.9.3",
     "tsx": "4.23.13",
     "pg-mem": "3.0.14"

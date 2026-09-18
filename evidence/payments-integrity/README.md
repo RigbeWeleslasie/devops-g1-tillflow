@@ -38,13 +38,25 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments           # 88 tests
-npm test --workspace=@tillflow/commission         # 40 tests
-npm test --workspace=@tillflow/mpesa              # 32 tests
-npm test --workspace=@tillflow/integration-tests  #  9 tests
+npm test --workspace=@tillflow/payments           # 105 tests
+npm test --workspace=@tillflow/commission         #  54 tests
+npm test --workspace=@tillflow/mpesa              #  32 tests
+npm test --workspace=@tillflow/integration-tests  #   9 tests
 ```
 
-Or the whole repo — `npm ci && npm test` — 214 tests across seven workspaces.
+Or the whole repo — `npm ci && npm test` — 248 tests across seven workspaces.
+
+## G3 — the SLI metrics
+
+**[`metrics.md`](metrics.md)** is the emitted contract: the six instruments
+`services/payments` and `services/commission` record, every label value, which
+labels the SLO excludes and why, and three details of `infra/ecs.tf`'s `awsemf`
+exporter that an alarm has to be written around.
+
+They are recorded today and tested in CI, but **nothing is exported yet** —
+`services/_shared/ts/src/otel.ts` still configures a `traceExporter` only, so the
+OTel API hands back a no-op meter. They start flowing the day the shared metric
+reader lands, with no change to either service.
 
 ## Both G2 flows, across the real seams
 

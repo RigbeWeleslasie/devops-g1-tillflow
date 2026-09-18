@@ -30,6 +30,8 @@ export interface B2CCallbackOutcome {
   transition: 'PENDING->PAID' | 'PENDING->FAILED' | null;
   payoutId: string | null;
   ledgerId: string | null;
+  /** As on the STK side: left for a human rather than resolved. See CallbackOutcome. */
+  heldForReview: boolean;
   reason: string | null;
 }
 
@@ -74,6 +76,7 @@ export async function applyB2CCallback(body: B2CResultBody, opts: ApplyB2COption
       reference,
       resultCode,
       duplicateCount: row.duplicate_count,
+      heldForReview: false,
       payoutId: null as string | null,
       ledgerId: null as string | null,
       transition: null as B2CCallbackOutcome['transition'],
@@ -125,12 +128,14 @@ export async function applyB2CCallback(body: B2CResultBody, opts: ApplyB2COption
       const reportedKes = Number(raw);
       if (raw === undefined || !Number.isFinite(reportedKes)) {
         return finish(false, {
+          heldForReview: true,
           reason: `success callback carried no usable TransactionAmount (got ${JSON.stringify(raw)}); not marking paid`,
         });
       }
       const reportedMinor = Math.round(reportedKes * 100);
       if (reportedMinor !== payout.amount_minor) {
         return finish(false, {
+          heldForReview: true,
           reason: `callback amount ${reportedMinor} != payout amount ${payout.amount_minor}`,
         });
       }

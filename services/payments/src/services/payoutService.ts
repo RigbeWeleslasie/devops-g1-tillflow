@@ -25,6 +25,7 @@ import { toMinorUnits } from '@tillflow/shared/money';
 import { isUncertainOutcome, MpesaRejectedError, type B2CAck, type MpesaAdapter } from '@tillflow/mpesa';
 import type { Db } from '../db.js';
 import { isUniqueViolation } from '../db.js';
+import { recordCommand } from '../metrics.js';
 import { ValidationError } from './chargeService.js';
 
 export type PayoutStatus = 'PENDING' | 'PAID' | 'FAILED';
@@ -165,6 +166,9 @@ export async function createPayout(
         if (refreshed) return { payout: refreshed, created: false };
       }
     }
+    // Nothing was sent. This is I4's "duplicate disbursement = 0" holding, and
+    // it is the number the close's own `replayed` count should agree with.
+    recordCommand('b2c', 'idempotent');
     return { payout: existing, created: false };
   }
 
@@ -198,7 +202,10 @@ export async function createPayout(
   } catch (err) {
     if (isUniqueViolation(err)) {
       const winner = await getPayoutByLedgerId(db, input.ledgerId);
-      if (winner) return { payout: winner, created: false };
+      if (winner) {
+        recordCommand('b2c', 'idempotent');
+        return { payout: winner, created: false };
+      }
     }
     throw err;
   }
@@ -251,6 +258,10 @@ async function sendB2C(
         err instanceof Error ? `${err.name}: ${err.message}` : String(err),
         now().toISOString(),
       ]);
+      // I5, and the one that costs the most if mislabelled: an uncertain B2C
+      // is NOT a failed payout. Anything that treats it as one and retries is
+      // how an attendant gets paid twice.
+      recordCommand('b2c', 'uncertain');
       return;
     }
     if (err instanceof MpesaRejectedError) {
@@ -266,6 +277,7 @@ async function sendB2C(
         `UPDATE payout_ledger SET status = 'FAILED', updated_at = $2 WHERE id = $1 AND status IN ('COMPUTED', 'REQUESTED')`,
         [ledger.id, ts],
       );
+      recordCommand('b2c', 'rejected');
       return;
     }
     throw err;
@@ -281,4 +293,5 @@ async function sendB2C(
     `UPDATE payout_ledger SET status = 'REQUESTED', updated_at = $2 WHERE id = $1 AND status = 'COMPUTED'`,
     [ledger.id, ackTs],
   );
+  recordCommand('b2c', 'accepted');
 }

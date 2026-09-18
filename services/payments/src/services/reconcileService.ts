@@ -22,6 +22,7 @@ import { trace } from '@opentelemetry/api';
 import { isUncertainOutcome, STK_RESULT, type MpesaAdapter } from '@tillflow/mpesa';
 import type { Db } from '../db.js';
 import { LOCK_KEY, withAdvisoryLock, withTransaction } from '../db.js';
+import { recordReconcile } from '../metrics.js';
 import type { ChargeRow } from '../types.js';
 import { applyChargeResolution } from './resolution.js';
 
@@ -104,8 +105,15 @@ export async function runReconcileOnce(opts: ReconcileOptions): Promise<Reconcil
     // surfaces for a human, and move on.
     if (!charge.checkout_request_id) {
       summary.unqueryable++;
+      recordReconcile('unqueryable');
       await bumpAttempt(opts.db, charge.id, now());
-      if (charge.reconcile_attempts + 1 >= opts.maxAttempts) summary.needsAttention++;
+      if (charge.reconcile_attempts + 1 >= opts.maxAttempts) {
+        summary.needsAttention++;
+        // The label that closes I5. `uncertain` commands are only honestly
+        // "not an error" while something is still finding out what happened;
+        // this says it has stopped finding out. It should page.
+        recordReconcile('needs_attention');
+      }
       opts.logger?.warn(
         { chargeId: charge.id, saleId: charge.sale_id, attempts: charge.reconcile_attempts + 1 },
         'reconcile: charge has no CheckoutRequestID (push timed out); awaiting a late callback or an operator',
@@ -120,6 +128,7 @@ export async function runReconcileOnce(opts: ReconcileOptions): Promise<Reconcil
     } catch (err) {
       // Daraja unreachable or slow. Not an answer, so not a decision.
       summary.errors++;
+      recordReconcile('query_error');
       await bumpAttempt(opts.db, charge.id, now());
       opts.logger?.warn(
         {
@@ -135,8 +144,12 @@ export async function runReconcileOnce(opts: ReconcileOptions): Promise<Reconcil
 
     if (queryResult.status === 'pending') {
       summary.stillPending++;
+      recordReconcile('still_pending');
       await bumpAttempt(opts.db, charge.id, now());
-      if (charge.reconcile_attempts + 1 >= opts.maxAttempts) summary.needsAttention++;
+      if (charge.reconcile_attempts + 1 >= opts.maxAttempts) {
+        summary.needsAttention++;
+        recordReconcile('needs_attention');
+      }
       continue;
     }
 
@@ -179,8 +192,13 @@ export async function runReconcileOnce(opts: ReconcileOptions): Promise<Reconcil
     });
 
     if (applied?.applied) {
-      if (applied.transition === 'PENDING->PAID') summary.resolvedPaid++;
-      else summary.resolvedFailed++;
+      if (applied.transition === 'PENDING->PAID') {
+        summary.resolvedPaid++;
+        recordReconcile('resolved_paid');
+      } else {
+        summary.resolvedFailed++;
+        recordReconcile('resolved_failed');
+      }
       opts.logger?.info(
         {
           chargeId: charge.id,
@@ -193,6 +211,7 @@ export async function runReconcileOnce(opts: ReconcileOptions): Promise<Reconcil
       );
     } else {
       summary.stillPending++;
+      recordReconcile('still_pending');
     }
   }
 
