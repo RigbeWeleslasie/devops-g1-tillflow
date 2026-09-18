@@ -281,7 +281,9 @@ while IFS=$'\t' read -r arn name_tag; do
     # Identified by a generated id, so the Name tag is the only place a name can
     # live: EC2 (vpc-, subnet-), ELB, API Gateway (/apis/, /vpclinks/), ACM
     # (certificate/uuid) and Cloud Map (ns-, srv-).
-    *:ec2:*|*:elasticloadbalancing:*|*:apigateway:*|*:acm:*|*:servicediscovery:*)
+    # Grafana belongs here too: a workspace is addressed as /workspaces/g-abb9...,
+    # a server-assigned id, so the Name tag is the only place its name can live.
+    *:ec2:*|*:elasticloadbalancing:*|*:apigateway:*|*:acm:*|*:servicediscovery:*|*:grafana:*)
       if [[ -z "$name_tag" ]]; then
         red "FAIL  no Name tag: $arn"
         name_violations=$((name_violations + 1))
@@ -294,6 +296,15 @@ while IFS=$'\t' read -r arn name_tag; do
     # separately below.
     *:kms:*)
       : ;;
+    # Lambda's log group path is fixed by AWS as /aws/lambda/<function-name> --
+    # the function cannot write anywhere else, so the /devops-g1/ convention
+    # cannot apply. The name still has to be ours: check the function-name
+    # segment carries the prefix, which is the part we actually control.
+    *:log-group:/aws/lambda/*)
+      [[ "$arn" != *":log-group:/aws/lambda/${PREFIX}"* ]] && {
+        red "FAIL  lambda log group is not for a ${PREFIX} function: $arn"
+        name_violations=$((name_violations + 1))
+      } ;;
     *:log-group:*)
       [[ "$arn" != *"/${PREFIX}/"* ]] && {
         red "FAIL  log group not under /${PREFIX}/: $arn"

@@ -219,8 +219,67 @@ resource "aws_cloudwatch_metric_alarm" "canary_failed" {
 # "Slack firing/recovery" evidence is one topic, not two mechanisms.
 # ---------------------------------------------------------------------------
 
+# Alert payloads carry the runbook's 9-field contract: service names, observed
+# values and the first safe action. That is operational detail about how this
+# system fails, so the topic is encrypted at rest rather than left on SNS's
+# default (Trivy AWS-0095).
+#
+# Its own CMK, not the Secrets Manager key: alarm notifications are not
+# secrets, and a shared key would mean anything able to decrypt an alert could
+# also decrypt database credentials. Separate keys keep those grants distinct.
+resource "aws_kms_key" "alerts" {
+  description             = "${local.prefix} SNS alert topic encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  policy                  = data.aws_iam_policy_document.alerts_kms.json
+
+  tags = {
+    Name    = "${local.prefix}-alerts"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+resource "aws_kms_alias" "alerts" {
+  name          = "alias/${local.prefix}-alerts"
+  target_key_id = aws_kms_key.alerts.key_id
+}
+
+data "aws_iam_policy_document" "alerts_kms" {
+  # Without this the account has no path to administer the key and it becomes
+  # unmanageable -- including un-deletable at G5 cleanup.
+  statement {
+    sid       = "AccountAdmin"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${local.account_id}:root"]
+    }
+  }
+
+  # CloudWatch publishes to the topic as a service principal, so it needs the
+  # key directly. Omitting this does not fail the apply -- it silently breaks
+  # every alarm notification at the moment one fires, which is the worst
+  # possible time to discover it.
+  statement {
+    sid       = "CloudWatchPublish"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_sns_topic" "alerts" {
-  name = "${local.prefix}-alerts"
+  name              = "${local.prefix}-alerts"
+  kms_master_key_id = aws_kms_key.alerts.arn
 
   tags = {
     Name    = "${local.prefix}-alerts"
