@@ -348,6 +348,50 @@ resource "aws_apigatewayv2_route" "payments_callbacks" {
   target    = "integrations/${aws_apigatewayv2_integration.payments_callbacks.id}"
 }
 
+# Per-service routes that strip the routing prefix, same mechanism as the Daraja
+# callbacks above and for the same reason.
+#
+# The prefix has to exist on the public URL: the internal ALB chooses a target
+# group by path (`/pos/*` -> pos, `/payments/*` -> payments, `/*` -> web), and a
+# forward action cannot rewrite. But the services register their routes at root
+# -- `healthPlugin` mounts `/health`, not `/pos/health` -- so forwarding the raw
+# path made every request 404 at the service: the ALB routed it correctly and
+# then POS had no such route.
+#
+# `overwrite:path` runs on the integration, after API Gateway has matched the
+# route and before the request reaches the VPC Link, so the ALB still sees the
+# prefix and the service sees the path it actually serves.
+#
+# `commission` has no route: it is a queue consumer with no ingress.
+resource "aws_apigatewayv2_integration" "service_stripped" {
+  for_each = toset(["pos", "payments"])
+
+  api_id             = aws_apigatewayv2_api.main.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = aws_lb_listener.https.arn
+  integration_method = "ANY"
+
+  connection_type = "VPC_LINK"
+  connection_id   = aws_apigatewayv2_vpc_link.main.id
+
+  payload_format_version = "1.0"
+  timeout_milliseconds   = 29000
+
+  request_parameters = {
+    "overwrite:path" = "/$request.path.proxy"
+  }
+}
+
+resource "aws_apigatewayv2_route" "service_stripped" {
+  for_each = toset(["pos", "payments"])
+
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "ANY /${each.key}/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.service_stripped[each.key].id}"
+}
+
+# Web is the default: it owns the bare paths, so nothing is stripped and the
+# catch-all forwards unchanged.
 resource "aws_apigatewayv2_route" "proxy" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "ANY /{proxy+}"
