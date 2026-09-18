@@ -41,3 +41,26 @@ cd ..                && terraform init && terraform apply   # main stack (CI doe
 ## G0 status
 Scaffold only: `versions.tf`, `providers.tf`, `variables.tf`, `locals.tf`, `backend.tf`
 and `bootstrap/` are stubbed so `terraform validate` runs. Real resources land in G1.
+
+## Grafana access (G3)
+
+The AMG workspace (`observability.tf`) authenticates through IAM Identity
+Center. Terraform creates the workspace and its CloudWatch/X-Ray data sources,
+but **not** user assignments: `aws_grafana_role_association` takes Identity
+Center user IDs, which are per-person identifiers that do not belong in version
+control.
+
+Grant a person access with one call. `<user-id>` comes from Identity Center
+(`aws identitystore list-users --identity-store-id d-90667d9391`):
+
+```bash
+aws grafana update-permissions \
+  --workspace-id "$(cd infra && terraform output -raw grafana_workspace_id)" \
+  --update-instruction-batch \
+    'action=ADD,role=ADMIN,users=[{id=<user-id>,type=SSO_USER}]' \
+  --region us-east-1
+```
+
+Use `role=ADMIN` for the Reliability DRI (Rigbe builds the dashboards) and
+`role=VIEWER` for anyone who only needs to read them. Dashboards themselves are
+Area 4's deliverable, not Platform's — see `docs/ownership.md`.

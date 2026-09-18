@@ -763,3 +763,138 @@ resource "aws_cloudwatch_metric_alarm" "apigw_5xx" {
     owner   = "meron"
   }
 }
+
+# ---------------------------------------------------------------------------
+# Amazon Managed Grafana
+#
+# Scope note (docs/ownership.md): the WORKSPACE and its data sources are
+# Platform (Meron). The DASHBOARDS built inside it are Reliability (Rigbe) --
+# Area 4 names the Grafana export as her personal proof, so nothing here
+# creates a dashboard. This hands her a working, empty Grafana pointed at the
+# right data.
+#
+# `data_sources` grants the workspace role read access to those services and
+# registers them in the console; the runbook's "Grafana -> X-Ray data source,
+# filter by trace_id" workflow needs XRAY, and every SLO panel needs
+# CLOUDWATCH.
+#
+# Authentication is IAM Identity Center (the account already has an instance).
+# User assignment is deliberately NOT in Terraform: aws_grafana_role_association
+# needs Identity Center user/group IDs, which are per-person and would put
+# teammate identifiers in version control. See infra/README for the one CLI
+# call that grants a person ADMIN or EDITOR.
+# ---------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "grafana_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["grafana.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "grafana" {
+  name               = "${local.prefix}-grafana"
+  description        = "Amazon Managed Grafana workspace: reads CloudWatch metrics and X-Ray traces"
+  assume_role_policy = data.aws_iam_policy_document.grafana_assume.json
+
+  tags = {
+    Name    = "${local.prefix}-grafana"
+    service = "platform"
+    owner   = "meron"
+  }
+}
+
+# Read-only. Grafana renders our telemetry; it never writes to it. Scoped to
+# the read verbs rather than attaching CloudWatchReadOnlyAccess so the grant
+# stays auditable against the threat model.
+data "aws_iam_policy_document" "grafana" {
+  statement {
+    sid    = "ReadCloudWatchMetrics"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:DescribeAlarmsForMetric",
+      "cloudwatch:DescribeAlarmHistory",
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:ListMetrics",
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "cloudwatch:GetInsightRuleReport",
+    ]
+    resources = ["*"]
+  }
+
+  # Log Insights, for correlating a panel with the service log group.
+  statement {
+    sid    = "ReadLogs"
+    effect = "Allow"
+    actions = [
+      "logs:DescribeLogGroups",
+      "logs:GetLogGroupFields",
+      "logs:StartQuery",
+      "logs:StopQuery",
+      "logs:GetQueryResults",
+      "logs:GetLogEvents",
+    ]
+    resources = ["*"]
+  }
+
+  # The runbook's trace workflow: pull trace_id from an alert, open it here.
+  statement {
+    sid    = "ReadXRay"
+    effect = "Allow"
+    actions = [
+      "xray:BatchGetTraces",
+      "xray:GetTraceSummaries",
+      "xray:GetTraceGraph",
+      "xray:GetGroups",
+      "xray:GetTimeSeriesServiceStatistics",
+      "xray:GetInsightSummaries",
+      "xray:GetInsight",
+    ]
+    resources = ["*"]
+  }
+
+  # Resource tags power Grafana's per-service template variables, so a panel
+  # can filter by the `service` tag rather than hardcoding four copies.
+  statement {
+    sid    = "ReadResourceTags"
+    effect = "Allow"
+    actions = [
+      "tag:GetResources",
+      "ec2:DescribeRegions",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "grafana" {
+  name   = "${local.prefix}-grafana"
+  role   = aws_iam_role.grafana.id
+  policy = data.aws_iam_policy_document.grafana.json
+}
+
+resource "aws_grafana_workspace" "main" {
+  name        = local.prefix
+  description = "TillFlow uptime / SLO / error-budget dashboards (G3)"
+
+  account_access_type      = "CURRENT_ACCOUNT"
+  authentication_providers = ["AWS_SSO"]
+  permission_type          = "SERVICE_MANAGED"
+  role_arn                 = aws_iam_role.grafana.arn
+
+  # Registers the data sources and lets the service-managed policy read them.
+  data_sources = ["CLOUDWATCH", "XRAY"]
+
+  grafana_version = "12.4"
+
+  tags = {
+    Name    = local.prefix
+    service = "platform"
+    owner   = "meron"
+  }
+}
