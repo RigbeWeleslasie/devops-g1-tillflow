@@ -487,10 +487,18 @@ data "aws_iam_policy_document" "task" {
     actions   = ["cloudwatch:PutMetricData"]
     resources = ["*"]
 
+    # `TillFlow` is the namespace the shared ADOT collector config writes to
+    # (ecs.tf, awsemf exporter). The collector config is one SSM parameter
+    # shared by all four services, so it cannot template a per-service
+    # namespace; services are distinguished by the `service.name` resource
+    # attribute, which awsemf turns into a metric dimension. Without `TillFlow`
+    # here the sidecar gets AccessDenied on every metric export -- silently,
+    # since a failed PutMetricData does not fail the task. `TillFlow/<service>`
+    # is kept for any app that publishes its own metrics directly.
     condition {
       test     = "StringEquals"
       variable = "cloudwatch:namespace"
-      values   = ["TillFlow/${each.key}", "ECS/ContainerInsights"]
+      values   = ["TillFlow", "TillFlow/${each.key}", "ECS/ContainerInsights"]
     }
   }
 
