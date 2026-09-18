@@ -13,6 +13,13 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+
+    # Zips the uptime probe and Slack renderer (observability.tf) at plan time
+    # so the source stays reviewable as plain files in infra/alerting/.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 
   # Backend is configured in backend.tf once infra/bootstrap has been applied.
