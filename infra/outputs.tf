@@ -77,3 +77,23 @@ output "alb_dns_name" {
   description = "Internal ALB DNS (reachable only from inside the VPC)."
   value       = aws_lb.main.dns_name
 }
+
+output "uptime_canary_name" {
+  description = "External uptime probe Lambda (outside the VPC). Publishes CloudWatchSynthetics/SuccessPercent."
+  value       = aws_lambda_function.uptime.function_name
+}
+
+output "alerts_topic_arn" {
+  description = "SNS topic every G3 alarm publishes to (firing and recovery)."
+  value       = aws_sns_topic.alerts.arn
+}
+
+output "grafana_workspace_id" {
+  description = "AMG workspace id. Used to grant a person access -- see infra/README.md."
+  value       = aws_grafana_workspace.main.id
+}
+
+output "grafana_workspace_endpoint" {
+  description = "Grafana URL. Feed to var.grafana_url so Slack alerts carry a panel link."
+  value       = "https://${aws_grafana_workspace.main.endpoint}"
+}
