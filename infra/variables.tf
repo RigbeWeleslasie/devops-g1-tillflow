@@ -297,3 +297,47 @@ variable "group" {
 }
 
 # owner is set per-resource/module (the DRI of that area), not globally.
+
+# ---------------------------------------------------------------------------
+# Observability (G3)
+# ---------------------------------------------------------------------------
+
+variable "canary_target_services" {
+  description = <<-EOT
+    Services the external probe checks through the public edge.
+
+    Deliberately an explicit list, NOT derived from `service_scale`: CI applies
+    with `service_images={}`, so every service computes to 0 there and a derived
+    list would empty itself on each CI apply, silently disabling the probe.
+
+    Only services with public ingress belong here. `commission` is a worker with
+    no target group or listener rule (edge.tf), so a request for it falls through
+    to web's catch-all and would pass for the wrong reason.
+
+    Add a service here as it comes up. Probing a service sitting at
+    desiredCount 0 gives a permanently red canary and a permanently firing
+    alarm -- alert fatigue, which is the failure mode G3 is meant to prevent.
+  EOT
+  type        = list(string)
+  default     = ["pos"]
+
+  validation {
+    condition     = length(var.canary_target_services) > 0
+    error_message = "At least one target is required; an empty probe is not an external probe."
+  }
+
+  validation {
+    condition     = !contains(var.canary_target_services, "commission")
+    error_message = "commission is a worker with no public ingress; probing it would read web's response."
+  }
+}
+
+variable "canary_schedule_expression" {
+  description = <<-EOT
+    How often the external probe runs. One minute is the tightest Synthetics
+    allows and gives the SLO's 28-day window ~40,320 samples, enough for the
+    0.1% web target to be measurable rather than nominal.
+  EOT
+  type        = string
+  default     = "rate(1 minute)"
+}
