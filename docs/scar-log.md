@@ -18,6 +18,62 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-17 — Two review-flagged bugs: forms 415 for real browsers, a migration edited after merge
+- **Area:** services/web, services/pos/migrations
+- **What happened:** A teammate's review of the deployed code (not a PR diff) found two
+  real bugs, both in Rigbe's own areas:
+  1. `services/web` never registered `@fastify/formbody`. Fastify's default body parser
+     only understands `application/json`; a real `<form method="post">` sends
+     `application/x-www-form-urlencoded` and got 415'd before any handler ran, for every
+     form in `views.ts` (login, setup, attendant/product/rate, sell, pay). The entire test
+     suite passed throughout because `app.inject({ payload })` sends JSON, not form
+     encoding -- so the UI had never actually worked outside of `.inject()`.
+  2. A prior change (adding the whole-shilling `CHECK` constraint) edited the ALREADY-
+     numbered `001_init.sql` in place instead of adding a new migration file.
+     `src/migrate.ts` tracks applied migrations by filename in a `schema_migrations`
+     table, so any database that had already run the original `001_init.sql` would never
+     see the edit -- only a database that had never run migrations at all (which is what
+     `pg-mem` always is, building fresh every test) would pick it up. Exactly the shape of
+     bug that's green in test and silently missing in prod.
+- **Impact:** Caught by review, not by any test in this repo -- underscores that "all
+  tests pass" was never proof the UI worked, or that the migration was actually applied
+  anywhere real. No merge/deploy impact avoided by luck; impact avoided by the review.
+- **Root cause:** (1) the web shell's Fastify setup was written and tested exclusively
+  through `.inject()` with object payloads, which silently uses JSON regardless of what a
+  real client would send -- the test suite never exercised the content type a browser
+  actually uses. (2) treating a migration as still-editable because no test forced
+  otherwise; `pg-mem`'s from-scratch-every-run nature made an edited migration
+  indistinguishable from a correct one, in every test that ran.
+- **Fix:** Registered `@fastify/formbody` in `services/web/src/app.ts`, and added a test
+  that POSTs with `content-type: application/x-www-form-urlencoded` and asserts the same
+  302-to-`/owner` outcome the JSON-payload login test gets, not just "not 415" (a wrong
+  status other than 415 would otherwise still pass a weaker assertion). Reverted
+  `001_init.sql` to its pre-edit state and added `002_whole_shilling_prices.sql` with the
+  same constraint via `ALTER TABLE ... ADD CONSTRAINT`.
+- **Update (same day, review of the fix itself):** the first version of this fix verified
+  the DB-level constraint by hand (a throwaway `db.query(...)` insert bypassing
+  `tenantService.createProduct`) but committed no test for it -- the PR description said
+  "verified" while the diff's POS test count stayed at 32 before and after. The reviewer
+  deleted `002_whole_shilling_prices.sql` outright and reran the suite: still 32/32, green.
+  Exactly the failure mode this fix exists to prevent, reproduced one level up, by the fix
+  itself. Added `services/pos/test/schema.test.ts` (same pattern as
+  `services/payments/test/schema.test.ts`): a raw `db.query` insert of a fractional price
+  into `products` and into `sale_items`, each asserting `/check|constraint/i`. Deleting
+  `002` now fails 2 of 34 POS tests instead of 0 of 32. Also fixed a second, smaller
+  reviewer catch: this file's `002` header and the paragraph above both still said
+  `scripts/migrate.ts`, which PR #11 moved to `src/migrate.ts` (the runtime image deletes
+  npm and strips devDependencies, so nothing under `scripts/` runs there anymore) --
+  updated both references.
+- **Prevention:** Applied migrations are immutable from here on -- any further schema
+  change is a new numbered file, no exceptions, regardless of whether a real database has
+  actually run the old one yet. Every migration that adds a constraint reachable only by
+  bypassing the application layer needs its own `schema.test.ts`-style raw-insert test, not
+  just a claim in the PR description. For the form bug: worth a standing reminder that
+  `app.inject({ payload: object })` is not a browser and never proves a `<form>` actually
+  works -- every one of `services/web/test/web.test.ts`'s pre-existing tests took the JSON
+  path, and none would have failed even with formbody missing entirely.
+- **Owner:** Rigbe
+
 ### 2026-09-17 — The close computed 0% for every attendant, and only the real seam showed it
 - **Area:** tests/integration, services/pos (clock), services/commission
 - **What happened:** The first cross-service run of the `close → commission → B2C` flow
