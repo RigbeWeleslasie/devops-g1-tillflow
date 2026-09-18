@@ -1,0 +1,167 @@
+name: k6 load
+
+# Lane owner: Meron (Platform + delivery) owns this workflow and the runner
+# plumbing. The SCENARIOS it runs -- k6/*.js, their thresholds and the capacity
+# model -- are Rigbe's (Reliability + operations, docs/ownership.md Area 4).
+# This file deliberately contains no thresholds and no load shape: it runs
+# whatever k6/<scenario>.js says, so tuning load never means editing CI.
+#
+# Runs on demand, never on push. A load test costs real money against a real
+# environment and can itself burn the error budget it is measuring, so it is
+# not something a merge should trigger by surprise.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Which k6 scenario to run
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, baseline, spike, soak]
+      base_url:
+        description: Target base URL (blank = resolve the API Gateway edge from AWS)
+        required: false
+        type: string
+      # Results are published as a run artifact only. Writing to the evidence
+      # bucket would need s3:PutObject, and the only role this job can assume
+      # (ci-plan) is ReadOnlyAccess with an explicit Deny on object reads --
+      # deliberately so, since it is assumable by any pull_request run. Adding
+      # a write grant there to save a download would hand every PR a way to
+      # write into the evidence bucket. Download the artifact and commit it to
+      # evidence/reliability-ops/ instead.
+
+permissions:
+  contents: read
+
+# One load test at a time. Two concurrent runs would contend for the same
+# environment and make both results meaningless -- and unlike a deploy, an
+# in-flight load test is safe to cancel.
+concurrency:
+  group: k6
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  NAME_PREFIX: devops-g1
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    # Deliberately NOT `environment: prod`. That environment gates deploys
+    # behind a required reviewer; a read-only load test against an already
+    # deployed stack does not need deploy approval, and gating it there would
+    # make this job unrunnable while `prod` has no reviewer assigned.
+    permissions:
+      id-token: write
+      contents: read
+
+    # soak is >= 15 min by definition (k6/README.md) plus ramp and teardown;
+    # the default 360-minute limit would let a hung run bill for hours.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The scenario is Rigbe's to write. Until k6/<scenario>.js exists this
+      # job should say so in one clear line rather than fail deep inside the
+      # k6 binary with a stack trace about a missing module.
+      - name: Check the scenario exists
+        run: |
+          script="k6/${{ inputs.scenario }}.js"
+          if [[ ! -f "$script" ]]; then
+            echo "::error::$script does not exist yet."
+            echo "k6 scenarios are owned by the Reliability DRI (docs/ownership.md, Area 4)."
+            found="$(ls k6/*.js 2>/dev/null | tr '\n' ' ')"
+            echo "Present in k6/: ${found:-none}"
+            exit 1
+          fi
+          echo "running $script"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # The read-only plan role, not ci-deploy: this job only reads the API
+          # endpoint and writes evidence. A load test has no reason to hold
+          # PowerUserAccess.
+          role-to-assume: arn:aws:iam::240462142849:role/devops-g1-ci-plan
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Resolved from AWS rather than hardcoded so the workflow survives the
+      # G5 destroy/rebuild, which issues a new API Gateway id.
+      - name: Resolve target URL
+        id: target
+        run: |
+          url="${{ inputs.base_url }}"
+          if [[ -z "$url" ]]; then
+            url="$(aws apigatewayv2 get-apis \
+              --query "Items[?Name=='${NAME_PREFIX}'].ApiEndpoint | [0]" \
+              --output text)"
+          fi
+          if [[ -z "$url" || "$url" == "None" ]]; then
+            echo "::error::could not resolve an API Gateway named '${NAME_PREFIX}'"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "target: $url"
+
+      # Fail fast and cheaply. Without this a misconfigured target burns the
+      # whole scenario duration before reporting anything useful.
+      - name: Verify the target is reachable
+        run: |
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            "${{ steps.target.outputs.url }}/pos/ready" || echo 000)"
+          echo "GET /pos/ready -> $code"
+          [[ "$code" == "200" ]] || {
+            echo "::error::target is not healthy (HTTP $code); not starting the load test"
+            exit 1
+          }
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Run k6
+        id: k6
+        env:
+          # MPESA_ADAPTER=fake keeps load off the Daraja sandbox, per
+          # k6/README.md. Never point a load test at the real provider.
+          BASE_URL: ${{ steps.target.outputs.url }}
+          MPESA_ADAPTER: fake
+        run: |
+          mkdir -p k6/results
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          out="k6/results/${{ inputs.scenario }}-${stamp}.json"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+          # --summary-export writes the machine-readable summary the capacity
+          # report is built from. The run's own thresholds decide pass/fail;
+          # this workflow does not second-guess them.
+          k6 run \
+            --out "json=${out}" \
+            --summary-export "k6/results/${{ inputs.scenario }}-${stamp}-summary.json" \
+            -e BASE_URL="$BASE_URL" \
+            -e MPESA_ADAPTER="$MPESA_ADAPTER" \
+            "k6/${{ inputs.scenario }}.js"
+
+      # if: always() -- a threshold breach is the most interesting result there
+      # is, and it is exactly the run whose data you need. Losing the JSON on
+      # failure would defeat the point of running it.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-${{ inputs.scenario }}-${{ github.run_id }}
+          path: k6/results/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### k6 — ${{ inputs.scenario }}"
+            echo
+            echo "- target: \`${{ steps.target.outputs.url }}\`"
+            echo "- result: ${{ steps.k6.outcome }}"
+            echo
+            echo "Thresholds are defined in \`k6/${{ inputs.scenario }}.js\` (owner: Reliability DRI)."
+          } >> "$GITHUB_STEP_SUMMARY"
