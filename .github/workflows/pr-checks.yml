@@ -186,6 +186,11 @@ jobs:
                 -e SERVICE_TOKEN=ci-smoke-test-token
                 -e POS_BASE_URL=http://localhost:1
                 -e PAYMENTS_BASE_URL=http://localhost:1
+                # worker.ts exits before createHealthServer() without this, so
+                # the probe finds no listener and `docker logs probe` shows a
+                # single line rather than a crash -- which reads like a broken
+                # image. Unreachable like the rest: nothing consumes it here.
+                -e CLOSE_QUEUE_URL=http://localhost:1/close
               )
               ;;
           esac
