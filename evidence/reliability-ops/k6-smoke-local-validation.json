@@ -1,0 +1,170 @@
+{
+    "metrics": {
+        "http_req_sending": {
+            "avg": 0.02153312302839112,
+            "min": 0.004,
+            "med": 0.016,
+            "max": 0.166,
+            "p(90)": 0.043,
+            "p(95)": 0.048
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(90)": 5.3921,
+            "p(95)": 6.392099999999999,
+            "avg": 2.6891151419558392,
+            "min": 0.64,
+            "med": 1.8969999999999998,
+            "max": 16.131
+        },
+        "iteration_duration": {
+            "med": 1009.221771,
+            "max": 1024.233625,
+            "p(90)": 1012.0294333,
+            "p(95)": 1013.6274334000001,
+            "avg": 1009.445241266666,
+            "min": 1004.06675
+        },
+        "data_sent": {
+            "count": 328733,
+            "rate": 5423.112764742424
+        },
+        "vus": {
+            "max": 5,
+            "value": 1,
+            "min": 1
+        },
+        "http_req_tls_handshaking": {
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0
+        },
+        "http_req_waiting": {
+            "med": 1.8495,
+            "max": 16.047,
+            "p(90)": 5.2713,
+            "p(95)": 6.2827,
+            "avg": 2.625441640378548,
+            "min": 0.616
+        },
+        "http_req_blocked": {
+            "med": 0.004,
+            "max": 2.32,
+            "p(90)": 0.009,
+            "p(95)": 0.011,
+            "avg": 0.010198738170346926,
+            "min": 0.001
+        },
+        "http_req_receiving": {
+            "med": 0.0365,
+            "max": 0.295,
+            "p(90)": 0.071,
+            "p(95)": 0.08,
+            "avg": 0.04214037854889584,
+            "min": 0.01
+        },
+        "http_req_duration": {
+            "p(90)": 5.3921,
+            "p(95)": 6.392099999999999,
+            "avg": 2.6891151419558392,
+            "min": 0.64,
+            "med": 1.8969999999999998,
+            "max": 16.131,
+            "thresholds": {
+                "p(95)<500": false
+            }
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 634,
+            "thresholds": {
+                "rate<0.01": false
+            },
+            "value": 0
+        },
+        "checks": {
+            "fails": 0,
+            "passes": 1050,
+            "thresholds": {
+                "rate>0.99": false
+            },
+            "value": 1
+        },
+        "data_received": {
+            "count": 428801,
+            "rate": 7073.93591952836
+        },
+        "iterations": {
+            "count": 210,
+            "rate": 3.4643728515114365
+        },
+        "http_reqs": {
+            "count": 634,
+            "rate": 10.459106608848813
+        },
+        "http_req_connecting": {
+            "avg": 0.0018501577287066244,
+            "min": 0,
+            "med": 0,
+            "max": 0.271,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "vus_max": {
+            "value": 5,
+            "min": 5,
+            "max": 5
+        }
+    },
+    "setup_data": {
+        "attendantId": "8f75f6b9-0323-42b8-b8f4-563af110a626",
+        "ownerToken": "REDACTED-local-dev-jwt-signed-with-throwaway-local-secret",
+        "productId": "d5fd3b8a-f8ad-465c-9d71-93bda870d237",
+        "tenantId": "41d44cbf-694a-4b2b-bfd0-b6a31de0d67d"
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "POST /sales -> 201": {
+                    "passes": 210,
+                    "fails": 0,
+                    "name": "POST /sales -> 201",
+                    "path": "::POST /sales -> 201",
+                    "id": "879aa0c0419a3f8cc879e60caa5b6a3f"
+                },
+                "sale is UNPAID": {
+                    "name": "sale is UNPAID",
+                    "path": "::sale is UNPAID",
+                    "id": "55a00905ab7eca9af3cdafd14becfdc0",
+                    "passes": 210,
+                    "fails": 0
+                },
+                "total is server-computed (not 0)": {
+                    "name": "total is server-computed (not 0)",
+                    "path": "::total is server-computed (not 0)",
+                    "id": "462a3a82d03af863cf45679fa1a1386a",
+                    "passes": 210,
+                    "fails": 0
+                },
+                "POST /sales/{id}/pay -> 202": {
+                    "fails": 0,
+                    "name": "POST /sales/{id}/pay -> 202",
+                    "path": "::POST /sales/{id}/pay -> 202",
+                    "id": "109f92a92749bfe20a800bc5efd5353b",
+                    "passes": 210
+                },
+                "GET /sales/{id} -> 200": {
+                    "name": "GET /sales/{id} -> 200",
+                    "path": "::GET /sales/{id} -> 200",
+                    "id": "85ef7dca00581aa2de192c8a144d21d3",
+                    "passes": 210,
+                    "fails": 0
+                }
+            }
+    }
+}

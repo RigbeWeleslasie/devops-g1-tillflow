@@ -30,7 +30,7 @@ consumer** (`src/workers/salePaidConsumer.ts`), never by an HTTP handler — see
 | `GET /sales/:id` | any role, own tenant | cross-tenant → 404, not 403 |
 | `POST /sales/:id/pay` | any role, own tenant | body `{ customerMsisdn }`; calls Payments `POST /charges` with `tenantId` + phone; a timeout leaves the sale `UNPAID` with no `chargeId`, never a fabricated `FAILED` |
 | `GET /health` `GET /ready` `GET /version` | none | golden path, `@tillflow/shared/health` |
-| `POST /dev/tokens` | none, non-production only | mints a JWT for a known `(tenantId, externalAuthId)` — see "Auth scope" below |
+| `POST /dev/tokens` | none, unless `DEV_AUTH_ENABLED=false` | mints a JWT for a known `(tenantId, externalAuthId)` — see "Auth scope" below |
 
 ## Auth scope (read before assuming this is a full login system)
 
@@ -41,6 +41,15 @@ What's real and enforced: every route reads `tenantId`/`role` from a **verified 
 the `users` table — a placeholder for wherever real sign-in eventually lives, not a
 security hole: swapping it for real login only ever touches that one route, since
 everything downstream only reads `request.principal`.
+
+**`DEV_AUTH_ENABLED`** (default: enabled) controls `/dev/tokens`, and is deliberately its
+own env var, not `NODE_ENV`. The Dockerfile bakes `NODE_ENV=production` into every real
+image — correctly, that's a Node/framework flag, not an environment name — but this
+capstone's one deployed environment is also the *only* place k6, the game-day drill, or
+anyone testing the real system can get a token at all, since there's no other login flow.
+Gating `/dev/tokens` on `NODE_ENV` meant it was silently 404 the moment a real image ran
+(found while wiring k6 against a deployed target — `docs/scar-log.md`). Set
+`DEV_AUTH_ENABLED=false` the day this deployment stops being sandbox-only.
 
 ## Invariants (`docs/adr/0006-idempotency-and-replay.md`, `docs/adr/0007`)
 

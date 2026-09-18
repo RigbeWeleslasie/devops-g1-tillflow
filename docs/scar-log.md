@@ -18,6 +18,40 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-18 — /dev/tokens was silently unreachable in every real deployed image
+- **Area:** services/pos (auth)
+- **What happened:** While wiring k6 against a deployed target for G3, realized there is
+  no way to obtain an auth token against the real system at all: `POST /dev/tokens` (the
+  only token-issuing route POS has — see the README's "Auth scope") was gated on
+  `process.env.NODE_ENV !== 'production'`, and `services/pos/Dockerfile` bakes
+  `NODE_ENV=production` into every image it builds. So the route was mounted in every test
+  run (`NODE_ENV` unset under `node --test`) and unmounted (404) the moment a real image
+  ran anywhere — smoke tests, a real deploy, k6, the G4 game-day drill would all have hit
+  the same wall.
+- **Impact:** Caught before any of that actually ran, while writing `k6/lib/auth.js`.
+  Zero runtime impact, but it would have blocked essentially all of G3/G4's evidence
+  collection against a real deployment if found later.
+- **Root cause:** `NODE_ENV=production` is the correct, standard flag for a Node process
+  (framework-level perf/logging behavior) and has nothing to do with which *environment*
+  the process is deployed to. This capstone has exactly one deployed environment, and it
+  is simultaneously "prod" by that Node flag's definition and the only place anyone can
+  reach the system at all — conflating the two meant the one login mechanism this service
+  has disabled itself the moment it ran for real.
+- **Fix:** Decoupled `/dev/tokens` from `NODE_ENV`; it's now gated on a dedicated
+  `DEV_AUTH_ENABLED` env var (default: enabled). Verified directly: built `dist/server.js`
+  and ran it with `NODE_ENV=production` set (matching the real image) — `/dev/tokens` went
+  from 404 (route not mounted) to reachable; with `DEV_AUTH_ENABLED=false` added, back to
+  404, confirming the explicit off-switch still works for whenever this deployment stops
+  being sandbox-only.
+- **Prevention:** Any config decision that reads a generic runtime flag (`NODE_ENV`,
+  `ENVIRONMENT`) to decide something deployment-specific is worth a second look — the
+  generic flag is usually answering a different question than the one being asked. Also:
+  the earlier G2 evidence (`services/pos/scripts/demo.ts`) never caught this because it
+  drives the app in-process via `app.inject()`, which never goes through a real Docker
+  image at all — worth remembering that "the demo passes" and "a deployed image works" are
+  different claims.
+- **Owner:** Rigbe
+
 ### 2026-09-17 — Two review-flagged bugs: forms 415 for real browsers, a migration edited after merge
 - **Area:** services/web, services/pos/migrations
 - **What happened:** A teammate's review of the deployed code (not a PR diff) found two

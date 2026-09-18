@@ -30,7 +30,22 @@ declare module 'fastify' {
 export interface AuthPluginOptions {
   jwtSecret: string;
   db: Db;
-  /** Mounts POST /dev/tokens. Defaults to NODE_ENV !== 'production'. */
+  /**
+   * Mounts POST /dev/tokens. Defaults to DEV_AUTH_ENABLED != 'false'.
+   *
+   * Deliberately NOT keyed on NODE_ENV: the Dockerfile bakes
+   * NODE_ENV=production into every real image (correct -- that's a
+   * Node/framework performance flag, not an environment name), but this
+   * capstone's one deployed environment is also the only place k6, the
+   * game-day drill, and anyone testing the real system can get a token at
+   * all -- there is no other login flow (see the README's "Auth scope").
+   * Gating on NODE_ENV meant /dev/tokens was silently unreachable the
+   * moment a real image ran, discovered while wiring k6 against a
+   * deployed target (docs/scar-log.md). DEV_AUTH_ENABLED is the explicit,
+   * separately-controlled switch this needs: default on for as long as
+   * this deployment is sandbox-only (brief: never real money or customer
+   * data), set to "false" the day that stops being true.
+   */
   devAuthEnabled?: boolean;
 }
 
@@ -58,7 +73,7 @@ export default fp<AuthPluginOptions>(async function authPlugin(app: FastifyInsta
     };
   });
 
-  const devAuthEnabled = opts.devAuthEnabled ?? process.env['NODE_ENV'] !== 'production';
+  const devAuthEnabled = opts.devAuthEnabled ?? process.env['DEV_AUTH_ENABLED'] !== 'false';
   if (devAuthEnabled) {
     app.post<{ Body: { tenantId: string; externalAuthId: string } }>(
       '/dev/tokens',
