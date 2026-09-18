@@ -47,7 +47,9 @@ export function bootstrapTenant() {
     );
   }
   const ownerToken = tokenRes.json('token');
-  const authHeaders = { headers: { 'content-type': 'application/json', authorization: `Bearer ${ownerToken}` } };
+  const bootstrapAuthHeaders = {
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ownerToken}` },
+  };
 
   const attendantRes = http.post(
     posUrl(`/tenants/${tenant.id}/attendants`),
@@ -56,7 +58,7 @@ export function bootstrapTenant() {
       displayName: 'k6 Attendant',
       msisdn: '254708374149', // Daraja sandbox's well-known test MSISDN
     }),
-    authHeaders,
+    bootstrapAuthHeaders,
   );
   if (attendantRes.status !== 201) {
     throw new Error(`bootstrap: POST /tenants/:id/attendants -> ${attendantRes.status} ${attendantRes.body}`);
@@ -66,7 +68,7 @@ export function bootstrapTenant() {
   const productRes = http.post(
     posUrl(`/tenants/${tenant.id}/products`),
     JSON.stringify({ name: 'k6 Widget', unitPriceMinor: PRODUCT_PRICE_MINOR }),
-    authHeaders,
+    bootstrapAuthHeaders,
   );
   if (productRes.status !== 201) {
     throw new Error(`bootstrap: POST /tenants/:id/products -> ${productRes.status} ${productRes.body}`);
@@ -103,7 +105,16 @@ export function createSale(data, idempotencyKey, quantity = 1) {
   );
 }
 
-/** POST /sales/{id}/pay -- the Daraja sandbox's well-known test MSISDN. */
+/**
+ * POST /sales/{id}/pay -- the Daraja sandbox's well-known test MSISDN.
+ * Every VU pays the same MSISDN + PRODUCT_PRICE_MINOR. Fine under the fake
+ * adapter (KES 250 -> deterministic success, ADR 0005) -- if a scenario is
+ * ever changed to hit a timeout path, Payments' findAdoptableCharge
+ * (services/payments/src/services/callbackService.ts) can no longer tell
+ * same-amount concurrent charges apart and reports 'ambiguous' for all of
+ * them. By design there, but surprising in a load-test report if nobody
+ * expects it -- vary amount or MSISDN per VU first if that path is added.
+ */
 export function paySale(data, saleId) {
   return http.post(
     posUrl(`/sales/${saleId}/pay`),

@@ -88,20 +88,22 @@ an immediate P1, release freeze on `commission` + `payments`, and a scar-log ent
   POS server + Postgres (`evidence/reliability-ops/`); not yet run against a real
   deployed target — `k6/README.md`.
 
-- **Queue-age is stack-wide, not per-service.** `infra/data.tf` provisions a single
-  `aws_sqs_queue.main`/`.dlq` pair per logical queue (`sale-events`, `commission-payout`),
-  not one pair per service. A "bounded queue age" alarm on `sale-events` reflects the POS
-  worker's consumer health specifically (it's the only consumer of that queue), but there
-  is no way to attribute age or depth to an individual *tenant* or to distinguish "POS is
-  slow" from "a burst of legitimate traffic" from the metric alone — both look identical
-  as rising `ApproximateAgeOfOldestMessage`. Fine for G3: don't claim per-tenant or
-  per-cause attribution on the Grafana panel that isn't there. If genuine per-tenant
-  isolation is ever needed, that's a queue-topology change (e.g. SQS message-group
-  ordering or per-tenant queues), not a dashboard fix.
+- **Queue-age is per-service, not per-tenant.** `infra/data.tf` (`local.queues`,
+  `for_each`) provisions one `aws_sqs_queue.main`/`.dlq` pair per logical queue
+  (`sale-events` owned by `pos`, `commission-payout` owned by `commission`), each tagged
+  with its owning service — so a "bounded queue age" alarm on `sale-events` is already
+  scoped to POS's consumer health specifically, not stack-wide. What it *can't* do is
+  attribute age or depth to an individual *tenant*, or distinguish "POS is slow" from "a
+  burst of legitimate traffic" from the metric alone — both look identical as rising
+  `ApproximateAgeOfOldestMessage` within that one service's queue. Fine for G3: don't
+  claim per-tenant or per-cause attribution on the Grafana panel that isn't there. If
+  genuine per-tenant isolation is ever needed, that's a queue-topology change (e.g. SQS
+  message-group ordering or per-tenant queues), not a dashboard fix.
 
 ## Change log
 
 | Date | Change | Rationale | By |
 | ---- | ------ | --------- | -- |
-| 2026-09-18 | Queue-attribution caveat added to Capacity | G3 planning (Meron's review) | Rigbe |
+| 2026-09-18 | Corrected queue-attribution caveat: queues are per-service (`infra/data.tf` `for_each`), not stack-wide as first written — narrowed to the real gap, per-tenant attribution | PR #21 review (Meron) caught the original claim was wrong | Rigbe |
+| 2026-09-18 | Queue-attribution caveat added to Capacity (superseded same day, see above) | G3 planning | Rigbe |
 | 2026-09-09 | Initial draft from the reliability contract | G0 | Rigbe |

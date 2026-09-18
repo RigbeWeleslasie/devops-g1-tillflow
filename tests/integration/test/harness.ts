@@ -187,6 +187,11 @@ export async function startStack(opts: { startMs?: number } = {}): Promise<Stack
     jwtSecret: 'integration-jwt-secret',
     serviceToken: SERVICE_TOKEN,
     logger: false,
+    // Explicit opt-in, same as the sandbox's real infra grant
+    // (infra/service-mesh.tf) -- DEV_AUTH_ENABLED now defaults to off
+    // (docs/scar-log.md), and this harness's POST /dev/tokens calls below
+    // need the route mounted.
+    devAuthEnabled: true,
   });
 
   // Stands in for devops-g1-sale-events. The real queue is at-least-once;

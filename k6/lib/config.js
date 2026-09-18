@@ -6,6 +6,11 @@ export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$
 // POS is mounted at /api/pos/* (and bare /pos/*) behind the real API
 // Gateway -> ALB edge (infra/edge.tf); against a bare local server (no
 // edge in front) POS_PREFIX can be set to '' instead.
+//
+// This default assumes the edge passes the full path through unrewritten
+// (ANY /{proxy+}, no prefix strip) -- the current state after #18 reverted
+// the strip. If that ever changes, this default has to move with it or
+// every route 404s against a real deployed target.
 export const POS_PREFIX = __ENV.POS_PREFIX ?? '/api/pos';
 
 // The one thing every scenario needs and none of them should hand-roll:

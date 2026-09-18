@@ -31,7 +31,8 @@ export interface AuthPluginOptions {
   jwtSecret: string;
   db: Db;
   /**
-   * Mounts POST /dev/tokens. Defaults to DEV_AUTH_ENABLED != 'false'.
+   * Mounts POST /dev/tokens. Defaults to DEV_AUTH_ENABLED == 'true' --
+   * fail CLOSED. Not opt-out, opt-in.
    *
    * Deliberately NOT keyed on NODE_ENV: the Dockerfile bakes
    * NODE_ENV=production into every real image (correct -- that's a
@@ -42,9 +43,16 @@ export interface AuthPluginOptions {
    * Gating on NODE_ENV meant /dev/tokens was silently unreachable the
    * moment a real image ran, discovered while wiring k6 against a
    * deployed target (docs/scar-log.md). DEV_AUTH_ENABLED is the explicit,
-   * separately-controlled switch this needs: default on for as long as
-   * this deployment is sandbox-only (brief: never real money or customer
-   * data), set to "false" the day that stops being true.
+   * separately-controlled switch this needs.
+   *
+   * It must default OFF: POST /tenants is intentionally unauthenticated
+   * (tenant #1 bootstrap), so an opt-out default chains straight through
+   * it -- POST /tenants picks its own externalAuthId, POST /dev/tokens
+   * mints that same identity a 12h owner JWT, no credential required at
+   * any step (found via PR #21 review, docs/scar-log.md). The env var is
+   * set explicitly to "true" in the sandbox task definition
+   * (infra/service-mesh.tf, pos service_env) so the grant is a line in a
+   * Terraform diff someone reviews, not an invisible default.
    */
   devAuthEnabled?: boolean;
 }
@@ -73,7 +81,7 @@ export default fp<AuthPluginOptions>(async function authPlugin(app: FastifyInsta
     };
   });
 
-  const devAuthEnabled = opts.devAuthEnabled ?? process.env['DEV_AUTH_ENABLED'] !== 'false';
+  const devAuthEnabled = opts.devAuthEnabled ?? process.env['DEV_AUTH_ENABLED'] === 'true';
   if (devAuthEnabled) {
     app.post<{ Body: { tenantId: string; externalAuthId: string } }>(
       '/dev/tokens',

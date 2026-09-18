@@ -153,6 +153,14 @@ locals {
 
     pos = [
       { name = "PAYMENTS_BASE_URL", value = local.service_url["payments"] },
+      # Explicit grant, not an invisible default -- opt-in (see
+      # services/pos/src/plugins/auth.ts AuthPluginOptions.devAuthEnabled).
+      # POST /tenants is intentionally unauthenticated (tenant #1
+      # bootstrap); pairing that with an opt-out /dev/tokens default would
+      # let anyone mint their own owner JWT with no credential (PR #21
+      # review, docs/scar-log.md). Set to "false" the day this deployment
+      # stops being sandbox-only.
+      { name = "DEV_AUTH_ENABLED", value = "true" },
     ]
 
     payments = [

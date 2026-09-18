@@ -7,7 +7,7 @@
 | Claim | Proof | Reproduce |
 | --- | --- | --- |
 | `k6/smoke.js`, `k6/baseline.js`, `k6/spike.js`, `k6/soak.js` are real, working load tests — not just written | All four run end to end against a real POS server + real Postgres 16 (not `pg-mem`, not a mock): `smoke.js` 210 iterations / 1050 checks, `baseline.js` 91 iterations / 364 checks, `spike.js` 851 iterations / 1702 checks (correctly ramping to 10× baseline VUs), `soak.js` 239 iterations / 717 checks — **100% checks passed, 0% `http_req_failed`, all three thresholds green on every run** | see below |
-| `/dev/tokens` was silently unreachable in any real deployed image | Found while writing `k6/lib/pos.js` (needs a token to call authenticated routes); fixed in `services/pos/src/plugins/auth.ts` — full writeup `docs/scar-log.md` | `NODE_ENV=production node dist/server.js`, then `POST /dev/tokens` — was 404, now reachable |
+| `/dev/tokens` was silently unreachable in any real deployed image, then found to default *open* in a way that chained with the unauthenticated tenant-bootstrap route into a credential-free owner JWT | Both found while writing/reviewing `k6/lib/pos.js`'s `bootstrapTenant()`; fixed in `services/pos/src/plugins/auth.ts` (now opt-in, `DEV_AUTH_ENABLED=true` required) + `infra/service-mesh.tf` (explicit grant) — full writeup `docs/scar-log.md` | `services/pos/test/devTokens.test.ts` — 404 with no option/env var, 404 with `devAuthEnabled: false`, 200-with-working-token only when explicitly opted in |
 | Runbook procedures exist for every G3 alarm class before the alarms themselves do | `docs/runbook.md` §2.6–2.10 + the "Alarm → runbook section" index, so `infra/observability.tf`'s `alarm_description.runbook_link` has somewhere real to point on day one | read `docs/runbook.md` |
 
 ## Reproduce the k6 validation runs
@@ -28,7 +28,7 @@ ADMIN_DATABASE_URL="postgres://$(whoami)@localhost:5432/tillflow_k6" node --impo
 PORT=18095 \
 DATABASE_URL="postgres://devops-g1-pos-app:<generated password>@localhost:5432/tillflow_k6" \
 JWT_SECRET=local-secret PAYMENTS_BASE_URL=http://localhost:1 SERVICE_TOKEN=local-token-16chars \
-SERVICE_NAME=pos COMMIT_SHA=local \
+SERVICE_NAME=pos COMMIT_SHA=local DEV_AUTH_ENABLED=true \
 node dist/server.js &
 
 cd ../..

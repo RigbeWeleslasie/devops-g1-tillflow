@@ -18,6 +18,43 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-18 — DEV_AUTH_ENABLED defaulted open, chaining with the unauthenticated tenant bootstrap into a credential-free owner JWT
+- **Area:** services/pos (auth), infra (task env)
+- **What happened:** PR #21 review (Meron) caught that the fix below (the previous entry)
+  introduced its own bug: `DEV_AUTH_ENABLED` was checked as `!== 'false'` — on unless
+  explicitly disabled — and nothing in `infra/` ever set it, so that default *was* the
+  deployed config. `POST /tenants` is intentionally unauthenticated by design (it has to
+  be — it's how tenant #1 gets created at all), and it accepts a caller-chosen
+  `ownerExternalAuthId`. Chained with `/dev/tokens` defaulting open: `POST /tenants` with
+  any made-up `ownerExternalAuthId`, then `POST /dev/tokens` with that same id, returns a
+  real 12-hour owner JWT — no credential required at any step. `k6/lib/pos.js`'s
+  `bootstrapTenant()` is a working demonstration of the exact chain, written for an
+  unrelated reason (k6 needs a token too) and reused as the proof.
+- **Impact:** Caught in code review before merge — the PR introducing `DEV_AUTH_ENABLED`
+  had not yet been merged to `main` or deployed. Zero runtime impact, but had it shipped as
+  originally written, the deployed sandbox (internet-facing per API Gateway `ANY /{proxy+}`
+  → `infra/edge.tf`) would have let anyone mint an owner token and drive real `/sales/pay`
+  calls, which reach the real Payments service and issue a real STK push against whatever
+  MSISDN they chose.
+- **Root cause:** An opt-out default is the wrong shape for a route that mints credentials,
+  full stop — doubly so sitting directly behind an unauthenticated bootstrap route.
+  "Default on because this is sandbox-only anyway" reasoned about the *service's* risk in
+  isolation and missed what it composes with one hop away.
+- **Fix:** Flipped to `=== 'true'` — opt-in, fail closed
+  (`services/pos/src/plugins/auth.ts`). Added the explicit grant to `infra/service-mesh.tf`
+  (`pos` `service_env`) so the sandbox keeps working, but now as a reviewable line in a
+  Terraform diff instead of an invisible default. Added
+  `services/pos/test/devTokens.test.ts`: asserts 404 with no option and no env var (the
+  direction that had zero test coverage before this), 404 with `devAuthEnabled: false`
+  explicit, and 200-with-a-working-token when explicitly opted in.
+- **Prevention:** When a security-relevant default has two directions, both need a test —
+  covering the ergonomic ("on works") direction only, because that's the one exercised
+  incidentally by every other test, means the actually-risky direction ships unverified.
+  Also: review a new unauthenticated or opt-out surface against what it's *adjacent* to,
+  not just in isolation — this one was safe as a standalone decision and dangerous one hop
+  downstream of an existing unauthenticated route.
+- **Owner:** Rigbe (fix); caught by Meron (PR #21 review)
+
 ### 2026-09-18 — /dev/tokens was silently unreachable in every real deployed image
 - **Area:** services/pos (auth)
 - **What happened:** While wiring k6 against a deployed target for G3, realized there is
@@ -38,11 +75,10 @@ incident or painful surprise. Blameless. Newest first.
   reach the system at all — conflating the two meant the one login mechanism this service
   has disabled itself the moment it ran for real.
 - **Fix:** Decoupled `/dev/tokens` from `NODE_ENV`; it's now gated on a dedicated
-  `DEV_AUTH_ENABLED` env var (default: enabled). Verified directly: built `dist/server.js`
-  and ran it with `NODE_ENV=production` set (matching the real image) — `/dev/tokens` went
-  from 404 (route not mounted) to reachable; with `DEV_AUTH_ENABLED=false` added, back to
-  404, confirming the explicit off-switch still works for whenever this deployment stops
-  being sandbox-only.
+  `DEV_AUTH_ENABLED` env var. Verified directly: built `dist/server.js` and ran it with
+  `NODE_ENV=production` set (matching the real image) and `DEV_AUTH_ENABLED=true` —
+  `/dev/tokens` went from 404 (route not mounted) to reachable. The default this env var
+  resolves to when unset turned out to be its own, worse bug — see the next entry.
 - **Prevention:** Any config decision that reads a generic runtime flag (`NODE_ENV`,
   `ENVIRONMENT`) to decide something deployment-specific is worth a second look — the
   generic flag is usually answering a different question than the one being asked. Also:
