@@ -43,6 +43,16 @@ export interface CallbackOutcome {
   applied: boolean;
   transition: 'PENDING->PAID' | 'PENDING->FAILED' | null;
   chargeId: string | null;
+  /**
+   * The charge was put on hold for a human (threat-model A1) rather than
+   * resolved. Carried as a field and not inferred from `reason` because for
+   * the SLI it is the difference between an error and a correct no-op: a hold
+   * is a real payment that never reached its terminal state, while an
+   * already-terminal charge is dedupe working. Both look identical otherwise
+   * — matched, not applied, no transition — and a reworded log message must
+   * not be able to change which one a metric reports.
+   */
+  heldForReview: boolean;
   /** Why nothing was applied, when nothing was. */
   reason: string | null;
 }
@@ -162,6 +172,7 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
       resultCode,
       duplicateCount,
       adopted: false,
+      heldForReview: false,
       chargeId: null as string | null,
       transition: null as CallbackOutcome['transition'],
     };
@@ -243,7 +254,7 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
           [charge.id, reason, nowDate.toISOString()],
         );
         span?.setAttributes({ 'payments.charge.hold': true });
-        return finish(false, { reason });
+        return finish(false, { reason, heldForReview: true });
       }
 
       // 4 + 5. Guarded transition and the one ledger effect.

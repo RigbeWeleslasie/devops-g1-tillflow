@@ -31,8 +31,9 @@ import { trace } from '@opentelemetry/api';
 import { commissionForSale, sumMinor, toMinorUnits, type MinorUnits } from '@tillflow/shared/money';
 import type { Db } from '../db.js';
 import { didInsert } from '../db.js';
+import { recordPayout, recordRunDuration, recordRunOnTime, startTimer } from '../metrics.js';
 import type { DailyCloseAttendant, PaymentsClient, PosReadClient } from '../types.js';
-import { isBusinessDay } from './businessDay.js';
+import { isBusinessDay, payoutDeadline } from './businessDay.js';
 
 export interface CloseOptions {
   db: Db;
@@ -91,6 +92,7 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
   const now = opts.now ?? (() => new Date());
   const { db, logger } = opts;
   const runId = randomUUID();
+  const elapsed = startTimer();
   const span = trace.getActiveSpan();
   span?.setAttributes({ 'commission.business_day': businessDay, 'commission.run_id': runId });
 
@@ -168,8 +170,22 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
         const created = didInsert(inserted, ledgerId);
         if (created) {
           result.ledgerRowsCreated++;
+          // `skipped_no_msisdn` is money a real person earned that nobody can
+          // send. It is reported apart from `skipped_zero` — which is just
+          // sub-shilling arithmetic — because the two need different humans.
+          recordPayout(
+            status === 'COMPUTED'
+              ? 'computed'
+              : attendant.msisdn === null && computed.payoutMinor > 0
+                ? 'skipped_no_msisdn'
+                : 'skipped_zero',
+          );
         } else {
           result.ledgerRowsExisting++;
+          // A redelivered trigger lands here and NOT in `requested`. That gap
+          // between the two series is what "duplicate disbursement = 0" looks
+          // like on a dashboard.
+          recordPayout('replayed');
           logger?.info(
             { tenantId: tenant.tenantId, attendantId: attendant.attendantId, businessDay },
             'close: ledger row already exists — replay, nothing recomputed',
@@ -194,6 +210,7 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
         const payout = await opts.payments.requestPayout(row.id);
         if (payout.outcome === 'accepted') {
           result.payoutsRequested++;
+          recordPayout('requested');
           span?.setAttributes({ 'payout.ledger_id': row.id });
           logger?.info(
             {
@@ -211,12 +228,14 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
           // Leave the row COMPUTED — the next run re-requests it, and
           // idempotency-on-ledgerId makes that safe. Never mark it FAILED.
           result.payoutsUncertain++;
+          recordPayout('uncertain');
           logger?.warn(
             { 'payout.ledger_id': row.id, reason: payout.reason },
             'close: payout request outcome unknown; row stays COMPUTED for the next run',
           );
         } else {
           result.payoutsUncertain++;
+          recordPayout('rejected');
           logger?.error(
             { 'payout.ledger_id': row.id, status: payout.status, error: payout.error },
             'close: payout rejected by Payments',
@@ -228,10 +247,32 @@ export async function runClose(businessDay: string, opts: CloseOptions): Promise
     result.status = 'FAILED';
     result.error = err instanceof Error ? err.message : String(err);
     await finishRun(db, runId, result, now());
+    recordRunDuration('failed', elapsed());
+    // A close that threw did not complete, so it did not complete on time.
+    // Unconditional, unlike the success path below: there is no reading of a
+    // broken daily close under which the SLI should stay green.
+    recordRunOnTime(false);
     throw err;
   }
 
   await finishRun(db, runId, result, now());
+  recordRunDuration('completed', elapsed());
+
+  // Only a run that actually closed the day gets to answer the SLO's on-time
+  // question. A pure replay — every row already there, nothing created — is
+  // re-closing a day that was closed earlier, and re-closing 2026-08-01 as a
+  // drill in September is trivially "after 06:30 on 2026-08-02". Letting a
+  // drill flip an SLO gauge red is how people learn to stop trusting the
+  // dashboard. An empty day (nothing created AND nothing existing) is a real
+  // close of a genuinely empty day, so it still counts.
+  const replayOnly = result.ledgerRowsCreated === 0 && result.ledgerRowsExisting > 0;
+  if (!replayOnly) {
+    // The deadline decision uses the INJECTED clock, not performance.now():
+    // it is a wall-clock question, and a frozen clock is what makes it
+    // testable at all.
+    recordRunOnTime(now().getTime() < payoutDeadline(businessDay).getTime());
+  }
+
   logger?.info({ ...result }, 'close: complete');
   return result;
 }
