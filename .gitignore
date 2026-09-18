@@ -4,6 +4,11 @@
 .env.*
 !.env.example
 *.pem
+# Exception: Amazon's PUBLIC RDS root CAs -- a trust anchor, not a secret.
+# It must be in the repo because the service images COPY it (see
+# services/_shared/certs/README.md). The *.pem rule above still covers
+# everything else, including private keys.
+!services/_shared/certs/rds-ca.pem
 *.key
 credentials
 aws.json

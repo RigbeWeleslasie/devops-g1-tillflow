@@ -49,10 +49,17 @@ RUN apk upgrade --no-cache && \
            /usr/local/bin/corepack \
            /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
+# Amazon's RDS root CAs. `pg` 8.23 treats `sslmode=require` as `verify-full`,
+# and Node's built-in trust store holds public web CAs, not Amazon's private RDS
+# ones -- so without this every connection dies with SELF_SIGNED_CERT_IN_CHAIN.
+# Committed rather than fetched at build time; see services/_shared/certs/README.md.
+COPY services/_shared/certs/rds-ca.pem /etc/ssl/certs/rds-ca.pem
+
 ARG COMMIT_SHA=unknown
 ARG IMAGE_DIGEST=unknown
 
 ENV NODE_ENV=production \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-ca.pem \
     PORT=8080 \
     COMMIT_SHA=${COMMIT_SHA} \
     IMAGE_DIGEST=${IMAGE_DIGEST} \
