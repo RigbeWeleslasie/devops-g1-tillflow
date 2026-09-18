@@ -317,10 +317,15 @@ resource "aws_lambda_function" "slack" {
   memory_size      = 128
 
   environment {
-    variables = merge(
-      { SLACK_WEBHOOK_SECRET_ARN = aws_secretsmanager_secret.slack_webhook.arn },
-      var.grafana_url != "" ? { GRAFANA_URL = var.grafana_url } : {},
-    )
+    variables = {
+      SLACK_WEBHOOK_SECRET_ARN = aws_secretsmanager_secret.slack_webhook.arn
+
+      # The workspace is in this same state, so the alert's "Grafana panel
+      # link" field is wired from the resource rather than from a variable
+      # somebody has to paste a URL into. var.grafana_url stays as an override
+      # for a workspace managed outside this stack.
+      GRAFANA_URL = var.grafana_url != "" ? var.grafana_url : "https://${aws_grafana_workspace.main.endpoint}"
+    }
   }
 
   depends_on = [aws_iam_role_policy.slack, aws_cloudwatch_log_group.slack]

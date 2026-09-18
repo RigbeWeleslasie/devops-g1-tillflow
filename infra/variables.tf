@@ -344,9 +344,13 @@ variable "canary_schedule_expression" {
 
 variable "grafana_url" {
   description = <<-EOT
-    Base URL of the Grafana workspace, injected into every Slack alert as the
-    contract's "Grafana panel link" field. Empty until AMG is provisioned;
-    the renderer then says so instead of linking nowhere.
+    Override for the Grafana base URL injected into every Slack alert as the
+    contract's "Grafana panel link" field.
+
+    Leave empty in normal use: the alert Lambda falls back to the workspace
+    this stack manages (aws_grafana_workspace.main), so the link stays correct
+    through a destroy/rebuild without anyone re-pasting a URL. Set this only to
+    point alerts at a Grafana managed outside this stack.
   EOT
   type        = string
   default     = ""
