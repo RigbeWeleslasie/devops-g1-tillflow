@@ -103,6 +103,28 @@ Per-area detail and per-invariant commands: `evidence/payments-integrity/`,
 Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
 **Blocked if:** no external probe, no per-service budget, or no actionable alert.
 
+### Rigbe's G3 status (k6 + runbook — unblocked, no dependency)
+- [x] `k6/smoke.js`, `k6/baseline.js`, `k6/spike.js`, `k6/soak.js` + `k6/lib/` written and
+      **validated locally** against a real POS server + real Postgres 16 (not `pg-mem`) —
+      100% checks passed, 0% `http_req_failed`, all thresholds green on every scenario
+      (`evidence/reliability-ops/`)
+- [x] Found + fixed a real bug while wiring k6 auth: `/dev/tokens` was silently
+      unreachable in every real deployed image (`services/pos/src/plugins/auth.ts`,
+      `docs/scar-log.md`)
+- [x] Runbook procedures 2.6–2.10 written for every G3 alarm class (external probe,
+      elevated error rate/latency, queue backlog/DLQ, resource saturation, error-budget
+      burn) + an "Alarm → runbook section" index so every future
+      `alarm_description.runbook_link` resolves to a real section (`docs/runbook.md`)
+- [x] Queue-age-is-stack-wide caveat added to `docs/slo-error-budgets.md` (flagged by
+      Meron's G3 review)
+- [ ] **Blocked, not started:** POS SLI counters (`pos_sale_write_total`,
+      duplicate-detection, DB unique-violation) — needs Meron's `services/_shared/ts/src/otel.ts`
+      `getMeter()` PR
+- [ ] **Blocked, not started:** Grafana panels with live data — needs real metrics
+      (depends on the above + `infra/observability.tf`)
+- [ ] **Blocked, not started:** k6 run/analysis against a real deployed target — needs an
+      actual ECS deploy + `infra/observability.tf`
+
 ## G4 — Recover (D13)
 Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsal.
 **Blocked if:** recovery asserted but not executed and timed.

@@ -30,7 +30,7 @@ consumer** (`src/workers/salePaidConsumer.ts`), never by an HTTP handler — see
 | `GET /sales/:id` | any role, own tenant | cross-tenant → 404, not 403 |
 | `POST /sales/:id/pay` | any role, own tenant | body `{ customerMsisdn }`; calls Payments `POST /charges` with `tenantId` + phone; a timeout leaves the sale `UNPAID` with no `chargeId`, never a fabricated `FAILED` |
 | `GET /health` `GET /ready` `GET /version` | none | golden path, `@tillflow/shared/health` |
-| `POST /dev/tokens` | none, non-production only | mints a JWT for a known `(tenantId, externalAuthId)` — see "Auth scope" below |
+| `POST /dev/tokens` | none, only if `DEV_AUTH_ENABLED=true` | mints a JWT for a known `(tenantId, externalAuthId)` — see "Auth scope" below |
 
 ## Auth scope (read before assuming this is a full login system)
 
@@ -38,9 +38,25 @@ G2 does not build an identity provider — that's out of scope (not in the Track
 What's real and enforced: every route reads `tenantId`/`role` from a **verified JWT**
 (`@fastify/jwt`), never from a path or body param, and role/tenant mismatches are rejected
 (`src/plugins/auth.ts`). `POST /dev/tokens` mints that JWT directly for a user already in
-the `users` table — a placeholder for wherever real sign-in eventually lives, not a
-security hole: swapping it for real login only ever touches that one route, since
-everything downstream only reads `request.principal`.
+the `users` table — a placeholder for wherever real sign-in eventually lives: swapping it
+for real login only ever touches that one route, since everything downstream only reads
+`request.principal`.
+
+**`DEV_AUTH_ENABLED`** controls `/dev/tokens`, and is deliberately its own env var, not
+`NODE_ENV`. The Dockerfile bakes `NODE_ENV=production` into every real image — correctly,
+that's a Node/framework flag, not an environment name — but this capstone's one deployed
+environment is also the *only* place k6, the game-day drill, or anyone testing the real
+system can get a token at all, since there's no other login flow. Gating `/dev/tokens` on
+`NODE_ENV` meant it was silently 404 the moment a real image ran (found while wiring k6
+against a deployed target — `docs/scar-log.md`).
+
+It **defaults to off** — opt-in (`=== 'true'`), not opt-out. `POST /tenants` is
+intentionally unauthenticated (tenant #1 bootstrap) and accepts a caller-chosen
+`ownerExternalAuthId`; an opt-out `/dev/tokens` default chains straight through it into a
+credential-free owner JWT (found in PR #21 review before merge, never deployed —
+`docs/scar-log.md`). The sandbox sets `DEV_AUTH_ENABLED=true` explicitly
+(`infra/service-mesh.tf`, `pos` `service_env`) so the grant shows up in a Terraform diff.
+Set it back to unset/`false` the day this deployment stops being sandbox-only.
 
 ## Invariants (`docs/adr/0006-idempotency-and-replay.md`, `docs/adr/0007`)
 

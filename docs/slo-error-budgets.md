@@ -79,15 +79,31 @@ Multi-window burn-rate alerting (Google SRE style) on each SLO:
 Commission's zero-double-pay invariant is **not** subject to burn-rate math: any breach is
 an immediate P1, release freeze on `commission` + `payments`, and a scar-log entry.
 
-## Capacity / k6 (target for G3)
+## Capacity / k6 (G3)
 
 - Load model, task size/count, scaling metric and highest sustainable RPS to be produced
   from k6 smoke → stepped baseline → spike → ≥15-min soak against the deterministic
   M-Pesa stub. Thresholds: failed < 1%, p95 < 500 ms, checks > 99%, CPU < 70%,
-  mem < 75%, bounded queue age. See `k6/README.md`.
+  mem < 75%, bounded queue age. Scripts: `k6/*.js`, validated locally against a real
+  POS server + Postgres (`evidence/reliability-ops/`); not yet run against a real
+  deployed target — `k6/README.md`.
+
+- **Queue-age is per-service, not per-tenant.** `infra/data.tf` (`local.queues`,
+  `for_each`) provisions one `aws_sqs_queue.main`/`.dlq` pair per logical queue
+  (`sale-events` owned by `pos`, `commission-payout` owned by `commission`), each tagged
+  with its owning service — so a "bounded queue age" alarm on `sale-events` is already
+  scoped to POS's consumer health specifically, not stack-wide. What it *can't* do is
+  attribute age or depth to an individual *tenant*, or distinguish "POS is slow" from "a
+  burst of legitimate traffic" from the metric alone — both look identical as rising
+  `ApproximateAgeOfOldestMessage` within that one service's queue. Fine for G3: don't
+  claim per-tenant or per-cause attribution on the Grafana panel that isn't there. If
+  genuine per-tenant isolation is ever needed, that's a queue-topology change (e.g. SQS
+  message-group ordering or per-tenant queues), not a dashboard fix.
 
 ## Change log
 
 | Date | Change | Rationale | By |
 | ---- | ------ | --------- | -- |
+| 2026-09-18 | Corrected queue-attribution caveat: queues are per-service (`infra/data.tf` `for_each`), not stack-wide as first written — narrowed to the real gap, per-tenant attribution | PR #21 review (Meron) caught the original claim was wrong | Rigbe |
+| 2026-09-18 | Queue-attribution caveat added to Capacity (superseded same day, see above) | G3 planning | Rigbe |
 | 2026-09-09 | Initial draft from the reliability contract | G0 | Rigbe |
