@@ -14,6 +14,7 @@ import { lineItemTotal, sumMinor, toMinorUnits, type MinorUnits } from '@tillflo
 import type { Sale, SaleItem, SaleStatus } from '../types.js';
 import type { PaymentsClient } from './paymentsClient.js';
 import type { SalePaidEvent } from '@tillflow/shared/events';
+import { recordSaleWrite } from '../metrics.js';
 
 export class NotFoundError extends Error {}
 export class IdempotencyConflictError extends Error {}
@@ -106,6 +107,7 @@ export async function createSale(
         `Idempotency-Key ${idempotencyKey} was already used with a different request body`,
       );
     }
+    recordSaleWrite('idempotent');
     return { status: existingRow.response_status, body: JSON.parse(existingRow.response_body) as Sale };
   }
 
@@ -114,7 +116,7 @@ export async function createSale(
   }
 
   try {
-    return await withTransaction(db, async (client) => {
+    const result = await withTransaction(db, async (client) => {
       const attendantResult = await client.query<{ id: string }>(
         'SELECT id FROM attendants WHERE id = $1 AND tenant_id = $2',
         [attendantId, tenantId],
@@ -202,6 +204,8 @@ export async function createSale(
 
       return { status: responseStatus, body: sale };
     });
+    recordSaleWrite('ok');
+    return result;
   } catch (err) {
     // A concurrent request for the SAME key won this race and committed
     // first: this transaction's own idempotency_keys insert hit the primary
@@ -224,6 +228,7 @@ export async function createSale(
             `Idempotency-Key ${idempotencyKey} was already used with a different request body`,
           );
         }
+        recordSaleWrite('unique_violation');
         return { status: row.response_status, body: JSON.parse(row.response_body) as Sale };
       }
     }

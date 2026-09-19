@@ -117,13 +117,22 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       `alarm_description.runbook_link` resolves to a real section (`docs/runbook.md`)
 - [x] Queue-age-is-stack-wide caveat added to `docs/slo-error-budgets.md` (flagged by
       Meron's G3 review)
-- [ ] **Blocked, not started:** POS SLI counters (`pos_sale_write_total`,
-      duplicate-detection, DB unique-violation) — needs Meron's `services/_shared/ts/src/otel.ts`
-      `getMeter()` PR
-- [ ] **Blocked, not started:** Grafana panels with live data — needs real metrics
-      (depends on the above + `infra/observability.tf`)
-- [ ] **Blocked, not started:** k6 run/analysis against a real deployed target — needs an
-      actual ECS deploy + `infra/observability.tf`
+- [x] POS SLI counter — `pos_sale_write_total{result}` (`services/pos/src/metrics.ts`),
+      wired into `saleService.ts`'s three real outcomes (`ok`/`idempotent`/
+      `unique_violation`), asserted through the real `POST /sales` route + the real
+      OpenTelemetry SDK (`services/pos/test/metrics.test.ts`), matching
+      `@tillflow/payments`' merged pattern (#20). `unique_violation` isn't exercised in
+      pg-mem (no real cross-transaction isolation — same documented gap as
+      `idempotency.test.ts`'s race case); real-Postgres coverage is a G4 drill candidate.
+- [x] `infra/observability.tf` confirmed **applied to real AWS** (not just merged) —
+      `devops-g1-pos` running 2/2, all 24 planned CloudWatch alarms exist. Confirmed while
+      starting G4 (`docs/gates.md` G4 section).
+- [ ] **In progress:** Grafana panels with live data — data sources now have real metrics
+      to read; dashboard build spec ready (`evidence/reliability-ops/grafana-dashboard-spec.md`),
+      not yet built.
+- [ ] **Blocked, not started:** k6 run/analysis against a real deployed target — `pos` is
+      live; `payments`/`commission`/`web` are still at `desiredCount 0`, so a full sale→pay
+      flow isn't exercisable yet.
 
 ## G4 — Recover (D13)
 Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsal.
