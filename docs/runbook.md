@@ -94,8 +94,16 @@ recovery + SLO impact.
 new SHA.
 **First safe action:** ECS rollback to previous task definition revision (immutable digest).
 **Steps:**
-1. CodePipeline auto-rollback should trigger on smoke failure — confirm in the console/logs.
-2. If manual: `aws ecs update-service --service devops-g1-<svc> --task-definition <prev-revision>`.
+1. There is no CodePipeline in this stack (`infra/pipeline.tf` was planned, never built —
+   `infra/README.md`'s layout diagram is stale on this point). The real mechanism is
+   `.github/workflows/deploy.yml`'s "Rollback on smoke failure" step and
+   `infra/scripts/deploy.sh`'s identical local fallback: both record the pre-deploy task
+   definition, and on smoke failure call `aws ecs update-service --task-definition
+   <previous>` automatically — confirm it fired in the Actions log or the script's own
+   output, not a CodePipeline console that doesn't exist. ECS's deployment circuit
+   breaker is the backstop if that scripted step itself doesn't run.
+2. Manual fallback if neither ran: `aws ecs update-service --service devops-g1-<svc>
+   --task-definition <prev-revision>`.
 3. Verify `/version` reverts, smoke passes, 5xx returns to baseline.
 4. Freeze that service; root-cause; forward-fix via new PR.
 **Proof (G4):** deploy a controlled failure, detect via smoke, demonstrate rollback.
