@@ -9,7 +9,7 @@
 
 | Item | Value |
 | ---- | ----- |
-| Alert channel | Slack `#devops-g1-alerts` (webhook in Secrets Manager `devops-g1/slack-webhook`) |
+| Alert channel | Slack `#all-codehive-2025` (webhook in Secrets Manager `devops-g1/slack-webhook`) |
 | Dashboards | Grafana → `TillFlow / Overview`, `TillFlow / <service>` |
 | Traces | Grafana → X-Ray data source, filter by `trace_id` from the alert |
 | Escalation | Area DRI (see `ownership.md`) → whole group |
