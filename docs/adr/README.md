@@ -9,6 +9,7 @@
 | 0005 | M-Pesa adapter interface + deterministic fake | Accepted | Nebyat |
 | 0006 | Idempotency & replay strategy            | Accepted | Nebyat |
 | 0007 | Sale model, tenancy & idempotency boundary | Accepted | Rigbe |
+| 0008 | CI/CD on GitHub Actions, not CodePipeline | Accepted | Meron  |
 
 New ADR: copy `0001-record-architecture-decisions.md` structure, next number, link it
 from `docs/ownership.md` and this table.

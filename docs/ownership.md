@@ -64,9 +64,10 @@ CodePipeline, and all security scans.
 - AWS region — [`adr/0002-aws-region.md`](adr/0002-aws-region.md)
 - Database (RDS PostgreSQL) sizing, Multi-AZ, per-service schemas/roles, backups/RPO — [`adr/0003-database-rds-postgresql.md`](adr/0003-database-rds-postgresql.md)
 - Object storage (S3 buckets, one per purpose) — [`adr/0004-object-storage-s3.md`](adr/0004-object-storage-s3.md)
+- CI/CD lane: GitHub Actions, not CodePipeline — [`adr/0008-cicd-github-actions.md`](adr/0008-cicd-github-actions.md)
 
 **Paths owned:** `infra/`, `.github/`, `services/_shared/` (co-owned with Nebyat for the
-adapter interface), `docs/adr/0002-*`, `0003-*`, `0004-*`
+adapter interface), `docs/adr/0002-*`, `0003-*`, `0004-*`, `0008-*`
 
 **Minimum personal proof:** `terraform plan` + gated `apply`, naming/tag audit output,
 and one pipeline release deploying a single service by SHA/digest.
@@ -104,5 +105,5 @@ Every critical decision has a named DRI. If any row loses its DRI, G0 is blocked
 | SLIs/SLOs & budget policy         | Rigbe  | `slo-error-budgets.md`                 |
 | Telemetry (spans/metrics/logs)    | Rigbe  | Grafana export + traces                |
 | Alerting & recovery               | Rigbe  | `runbook.md` + game day                |
-| CI/CD gates & promotion rule      | Meron  | `.github/workflows/` + pipeline run    |
+| CI/CD gates & promotion rule      | Meron  | `adr/0008-*` + `.github/workflows/` + pipeline run |
 | Threat model                      | Meron  | `threat-model.md`                      |

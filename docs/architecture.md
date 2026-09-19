@@ -146,10 +146,11 @@ is created on demand during G4 and destroyed after.
 - **GitHub Actions** — PR: lint, typecheck, tests, secret/dependency/IaC scan, Docker
   build, SBOM, image scan; `terraform plan` on PR. `main`: gated `terraform apply` via
   OIDC into `devops-g1-ci-deploy`.
-- **AWS CodePipeline** — CodeConnections → CodeBuild (test/build) → scan gate → ECR
-  (tagged by commit SHA, deployed by digest) → ECS deploy → post-deploy smoke → rollback
-  on failure. Path filters / per-service stages so a change under `services/payments/`
-  builds and deploys only Payments (+ its `_shared` deps).
+- **Deploy runs in Actions too**, not CodePipeline — `main`: build/push (SHA + digest) →
+  ECS deploy **by digest** → post-deploy smoke → rollback on failure. Path filters so a
+  change under `services/payments/` builds and deploys only Payments (+ its `_shared`
+  deps). The G0 draft of this section named AWS CodePipeline; that was reconsidered and
+  the reasoning is recorded in [`adr/0008-cicd-github-actions.md`](adr/0008-cicd-github-actions.md).
 - **No `latest` tags.** Commit SHA + immutable digest exposed in runtime `/version` and
   in pipeline evidence.
 
