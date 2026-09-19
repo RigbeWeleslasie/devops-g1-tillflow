@@ -1,11 +1,14 @@
 /**
  * The SQS consumer for the daily-close trigger.
  *
- * EventBridge Scheduler posts `{"type":"daily_close"}` to
- * devops-g1-commission-payout at 00:15 Africa/Nairobi (infra/data.tf). That
- * message carries no business day, so the worker derives it — the day that
- * has just ended. A message MAY name an explicit `businessDay`, which is
- * what makes a drill or a re-close reproducible.
+ * EventBridge Scheduler posts the trigger to devops-g1-commission-payout at
+ * 00:15 Africa/Nairobi (infra/data.tf). The message carries `scheduledFor`
+ * — the instant the schedule was due — and the worker closes the day that had
+ * ended by THAT instant. A message MAY also name an explicit `businessDay`,
+ * which is what makes a drill or a re-close reproducible.
+ *
+ * Deriving the day from the scheduled time rather than from the wall clock is
+ * load-bearing, not tidiness. See `resolveBusinessDay`.
  *
  * Delivery semantics, and why they are safe:
  *   - SQS is at-least-once. EventBridge's own retry policy (3 attempts) can
@@ -54,16 +57,66 @@ export interface WorkerOptions {
   useAdvisoryLock?: boolean;
 }
 
+/** Where the day we are closing came from. Logged, so a close can be audited. */
+export type BusinessDaySource = 'explicit' | 'scheduled' | 'processing-time';
+
 /**
- * Which day a trigger message asks us to close. An explicit businessDay
- * wins; otherwise the day that has just ended, in Nairobi.
+ * A `scheduledFor` we are willing to trust: parseable, and not in the future.
+ *
+ * The future check is the one that protects money. A scheduled time ahead of
+ * now would name a business day that has NOT finished, and closing a day still
+ * in progress pays commission on a partial day — then the ledger's
+ * UNIQUE(tenant, attendant, business_day) makes that partial figure permanent,
+ * so the rest of that day's sales are never paid. Falling back to the wall
+ * clock is strictly safer than trusting a clock we cannot explain.
  */
-export function businessDayFor(body: unknown, at: Date): string {
+function trustedScheduledTime(value: unknown, at: Date): Date | null {
+  if (typeof value !== 'string' || value === '') return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  if (ms > at.getTime()) return null;
+  return new Date(ms);
+}
+
+/**
+ * Which day a trigger asks us to close, and how we decided.
+ *
+ * Order: an explicit `businessDay` (a drill or a re-close) wins; then the day
+ * that had ended as of `scheduledFor`; then, only if neither is usable, the day
+ * that has ended as of now.
+ *
+ * That middle step exists because of a real incident. The scheduler's message
+ * used to carry no time at all, so the day came from the wall clock at
+ * PROCESSING time. `commission` sat at desiredCount 0 for four days while the
+ * deploy gate rolled itself back, four triggers queued up, and every one of
+ * them would have resolved to the same day the moment the worker started — one
+ * real close and three idempotent no-op replays, with the three older business
+ * days never closed and nothing anywhere looking wrong, because a replay is
+ * indistinguishable from success.
+ *
+ * The trigger has to carry the instant it was due. Anything derived from when
+ * the worker happens to get around to it is a guess that gets worse the longer
+ * a backlog sits — which is exactly when it matters.
+ */
+export function resolveBusinessDay(
+  body: unknown,
+  at: Date,
+): { businessDay: string; source: BusinessDaySource } {
   if (typeof body === 'object' && body !== null) {
-    const explicit = (body as { businessDay?: unknown }).businessDay;
-    if (isBusinessDay(explicit)) return explicit;
+    const b = body as { businessDay?: unknown; scheduledFor?: unknown };
+    if (isBusinessDay(b.businessDay)) return { businessDay: b.businessDay, source: 'explicit' };
+
+    const scheduled = trustedScheduledTime(b.scheduledFor, at);
+    if (scheduled) {
+      return { businessDay: businessDayToClose(scheduled), source: 'scheduled' };
+    }
   }
-  return businessDayToClose(at);
+  return { businessDay: businessDayToClose(at), source: 'processing-time' };
+}
+
+/** The day alone, for callers that do not care how it was decided. */
+export function businessDayFor(body: unknown, at: Date): string {
+  return resolveBusinessDay(body, at).businessDay;
 }
 
 export interface BatchResult {
@@ -84,12 +137,30 @@ export async function runOnce(opts: WorkerOptions): Promise<BatchResult> {
   const out: BatchResult = { received: messages.length, closed: 0, failed: 0, results: [] };
 
   for (const message of messages) {
-    const businessDay = businessDayFor(message.body, now());
+    // `daySource`, not `source`: `source` is already the TriggerSource in this
+    // scope, and shadowing it here would turn `source.ack()` below into a call
+    // on a string.
+    const { businessDay, source: daySource } = resolveBusinessDay(message.body, now());
     const span = trace.getActiveSpan();
     span?.setAttributes({
       'messaging.message_id': message.id,
       'commission.business_day': businessDay,
+      'commission.business_day_source': daySource,
     });
+
+    if (daySource === 'processing-time') {
+      // The trigger told us nothing about when it was due, so the day came
+      // from the wall clock. Correct for a trigger consumed promptly, and
+      // wrong for every one that has been sitting on the queue — see
+      // resolveBusinessDay. Warn rather than fail: closing today's day is
+      // still better than closing none, and the operator needs to know the
+      // close may have skipped days.
+      logger?.warn(
+        { 'messaging.message_id': message.id, businessDay },
+        'close: trigger carried no scheduledFor; day derived from the wall clock. ' +
+          'A backlogged trigger will close the wrong day — check infra/data.tf.',
+      );
+    }
 
     try {
       const run = async (): Promise<CloseResult> =>
@@ -127,6 +198,7 @@ export async function runOnce(opts: WorkerOptions): Promise<BatchResult> {
         {
           'messaging.message_id': message.id,
           businessDay,
+          businessDaySource: daySource,
           created: result.ledgerRowsCreated,
           existing: result.ledgerRowsExisting,
           requested: result.payoutsRequested,
