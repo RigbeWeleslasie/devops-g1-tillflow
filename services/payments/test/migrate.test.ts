@@ -37,6 +37,30 @@ describe('the app DATABASE_URL the migration job writes', () => {
     assert.equal(decodeURIComponent(url.password), nasty);
   });
 
+  test('carries sslmode through — RDS refuses an unencrypted connection', () => {
+    // rds.force_ssl = 1 (infra/data.tf, ADR 0003). An app URL without sslmode
+    // is rejected with "no pg_hba.conf entry ... no encryption" AFTER the
+    // service has started and passed /health, so the failure only shows up on
+    // DB-backed routes. This is the regression that broke every such route in
+    // production once a real image finally ran.
+    const url = new URL(buildAppDatabaseUrl(`${ADMIN}?sslmode=require`, 'app-pw'));
+    assert.equal(url.searchParams.get('sslmode'), 'require');
+    // and search_path must survive alongside it
+    assert.match(url.searchParams.get('options') ?? '', /search_path=/);
+  });
+
+  test('a stricter admin sslmode is preserved, not downgraded', () => {
+    const url = new URL(buildAppDatabaseUrl(`${ADMIN}?sslmode=verify-full`, 'app-pw'));
+    assert.equal(url.searchParams.get('sslmode'), 'verify-full');
+  });
+
+  test('adds no sslmode when the admin URL specifies none -- never invents a value', () => {
+    // Matches services/pos (PR #30): mirror the admin URL rather than deciding
+    // TLS policy here, so both services and the migration always agree.
+    const url = new URL(buildAppDatabaseUrl(ADMIN, 'app-pw'));
+    assert.equal(url.searchParams.get('sslmode'), null);
+  });
+
   test('the admin URL is not mutated', () => {
     const before = ADMIN;
     buildAppDatabaseUrl(ADMIN, 'x');

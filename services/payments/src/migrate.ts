@@ -161,7 +161,22 @@ export function buildAppDatabaseUrl(adminUrl: string, password: string): string 
   const url = new URL(adminUrl);
   url.username = encodeURIComponent(APP_ROLE);
   url.password = encodeURIComponent(password);
+
+  // `url.search = ''` below clears every query param, including `sslmode` --
+  // infra/secrets.tf sets `sslmode=require` on the admin URL specifically
+  // because ADR 0003 sets `rds.force_ssl=1`, so a plain connection is
+  // refused. Losing it here silently downgrades the APP's own connection to
+  // a plain one, which RDS then refuses -- every DB-backed route 500s, with
+  // nothing wrong in the app's own code to point at. Preserve whatever the
+  // admin URL specifies rather than hardcoding a value, so this keeps
+  // working if that ever changes to verify-full/verify-ca.
+  //
+  // Same fix as services/pos/src/migrate.ts (PR #30); payments carried the
+  // identical bug but hid it, because the service sits at desiredCount 0 and
+  // so has never opened a connection against real RDS.
+  const sslmode = admin.searchParams.get('sslmode');
   url.search = '';
+  if (sslmode) url.searchParams.set('sslmode', sslmode);
   url.searchParams.set('options', `-c search_path=${APP_SCHEMA},public`);
   // Keep the admin URL's database and host untouched — same server, same
   // database, different role.
