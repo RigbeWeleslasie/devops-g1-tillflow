@@ -76,6 +76,13 @@ Expect two `-> 200` lines. Other outcomes:
 - Alerts land in the `codeHive2025` workspace rather than a TillFlow-specific one: app
   creation is disabled in the school workspace. Channel name, secret and alert contract
   are unchanged by that.
+- **Channel moved since this was captured.** These screenshots/log show
+  `#all-codehive-2025` — that's the workspace's auto-created "all-" default channel
+  (101 members, the whole cohort), which a member outside this team noticed and flagged.
+  The webhook now points at a private `#group-1-devops` channel instead; same Slack app,
+  same `devops-g1/slack-webhook` secret path, same nine-field contract — only the
+  destination channel changed (`docs/runbook.md`). This drill's proof of the *mechanism*
+  stands regardless; only the channel named in these artifacts is dated.
 - `owner` in these two screenshots reads `meron` because the uptime probe is an edge
   alarm. The per-service alarms carry `rigbe` / `nebyat` from `local.service_owner`, so
   an alert routes to the DRI of the area that owns the failing service.

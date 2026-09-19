@@ -127,6 +127,13 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
 - [x] `infra/observability.tf` confirmed **applied to real AWS** (not just merged) —
       `devops-g1-pos` running 2/2, all 24 planned CloudWatch alarms exist. Confirmed while
       starting G4 (`docs/gates.md` G4 section).
+- [x] **"No actionable alert" cleared.** Meron proved the CloudWatch → SNS → Lambda →
+      Slack pipeline end to end (`evidence/reliability-ops/slack-alerting.md`): a forced
+      ALARM→OK on `devops-g1-uptime-probe-failing`, both messages carrying all nine
+      `docs/runbook.md` contract fields, both a `-> 200` in the Lambda's own delivery log.
+      Plumbing is Area 3's; the contract it's proving is Area 4's, which is why this line
+      is here. Not yet a **timed** drill against a real induced failure — that's G4's
+      game-day deliverable, not this checkbox.
 - [ ] **In progress:** Grafana panels with live data — data sources now have real metrics
       to read; dashboard build spec ready (`evidence/reliability-ops/grafana-dashboard-spec.md`),
       not yet built.
