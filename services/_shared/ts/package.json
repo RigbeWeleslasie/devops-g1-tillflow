@@ -12,6 +12,7 @@
     "./events": "./dist/events.js",
     "./otel": "./dist/otel.js",
     "./health": "./dist/health.js",
+    "./routePrefix": "./dist/routePrefix.js",
     "./serviceAuth": "./dist/serviceAuth.js"
   },
   "scripts": {

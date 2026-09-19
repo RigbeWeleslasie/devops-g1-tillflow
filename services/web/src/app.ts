@@ -3,6 +3,7 @@ import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import sensible from '@fastify/sensible';
 import { healthPlugin } from '@tillflow/shared/health';
+import { routePrefixRewrite } from '@tillflow/shared/routePrefix';
 import pagesRoutes from './routes/pages.js';
 
 export interface BuildAppOptions {
@@ -11,7 +12,12 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? true });
+  const app = Fastify({
+    logger: opts.logger ?? true,
+    // web owns the bare paths at the edge, but `/web/...` and `/api/web/...`
+    // must resolve too rather than 404. See @tillflow/shared/routePrefix.
+    rewriteUrl: routePrefixRewrite('web'),
+  });
 
   await app.register(sensible);
   await app.register(cookie);
