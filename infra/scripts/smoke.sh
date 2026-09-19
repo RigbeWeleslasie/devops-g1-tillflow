@@ -91,9 +91,30 @@ if [[ -z "$api" || "$api" == "None" ]]; then
   exit 1
 fi
 
-# The app strips this prefix itself (services/_shared/docker/app.js): API
-# Gateway's ANY /{proxy+} and the ALB listener rules both forward the raw path.
-base="${api}/${SERVICE}"
+# `/api/<service>`, not `/<service>`.
+#
+# API Gateway's ANY /{proxy+} and the ALB listener rules both forward the raw
+# path, so whatever is used here arrives at the container unchanged. The ALB
+# rule for each service matches BOTH spellings (`/api/pos/*` and `/pos/*`), so
+# routing is not what distinguishes them -- what the service does with the path
+# is.
+#
+# This used to smoke `/<service>`, on the stated assumption that "the app strips
+# this prefix itself (services/_shared/docker/app.js)". That is true of the
+# reference app -- app.js does `replace(/^\/(?:api\/)?<service>(?=\/|$)/, "")` --
+# and false of every real service: they are Fastify apps that register `/health`
+# and nothing rewrites the path in front of them.
+#
+# So the gate passed against the placeholder and 404'd against real code, then
+# the rollback step reverted the deploy. POS sat on the reference app at
+# revision 16 while revisions 24-32 carried real images, and each release
+# quietly undid itself. Verified by running the rev-32 image directly:
+# `/health` -> 200, `/pos/health` -> 404.
+#
+# `/api/<service>` is the spelling the services actually serve behind the edge.
+# If the shared TS package ever grows the reference app's prefix-stripping, both
+# spellings work and this can go back to either.
+base="${api}/api/${SERVICE}"
 echo "smoking $base"
 echo
 
