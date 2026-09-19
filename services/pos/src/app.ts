@@ -6,6 +6,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import sensible from '@fastify/sensible';
 import { healthPlugin } from '@tillflow/shared/health';
+import { routePrefixRewrite } from '@tillflow/shared/routePrefix';
 import { serviceAuthPlugin } from '@tillflow/shared/serviceAuth';
 import type { Db } from './db.js';
 import type { PaymentsClient } from './services/paymentsClient.js';
@@ -25,7 +26,12 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? true });
+  const app = Fastify({
+    logger: opts.logger ?? true,
+    // The edge forwards `/pos/...` unchanged; strip it before routing so no
+    // route has to know the prefix exists. See @tillflow/shared/routePrefix.
+    rewriteUrl: routePrefixRewrite('pos'),
+  });
 
   await app.register(sensible);
   await app.register(healthPlugin, { serviceName: 'pos' });
