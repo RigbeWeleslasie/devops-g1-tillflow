@@ -1,0 +1,19 @@
+# Slack alert delivery — firing and recovery
+#
+# Source: aws logs tail /aws/lambda/devops-g1-slack-alerts --since 5m \
+#           --profile devops-lab-new --region us-east-1
+# Captured: 2026-09-19, account 240462142849, us-east-1
+#
+# The two `-> 200` lines are the proof: Slack accepted both the ALARM and the
+# OK notification. Screenshots of the rendered messages are beside this file
+# (slack-alert-firing.png, slack-alert-recovered.png).
+
+2026-09-19T08:33:34.096000+00:00 INIT_START Runtime Version: python:3.12.mainlinev2.v43
+2026-09-19T08:33:34.920000+00:00 START RequestId: c13ac579-cdd8-44f6-a51f-8ba203808725 Version: $LATEST
+2026-09-19T08:33:35.582000+00:00 slack devops-g1-uptime-probe-failing ALARM -> 200
+2026-09-19T08:33:35.584000+00:00 END RequestId: c13ac579-cdd8-44f6-a51f-8ba203808725
+2026-09-19T08:33:35.584000+00:00 REPORT RequestId: c13ac579-cdd8-44f6-a51f-8ba203808725 Duration: 663.47 ms Billed Duration: 1485 ms Memory Size: 128 MB Max Memory Used: 93 MB Init Duration: 821.05 ms
+2026-09-19T08:34:16.456000+00:00 START RequestId: 977cc1c7-7e7b-4ed9-9eee-e6563b2b5895 Version: $LATEST
+2026-09-19T08:34:16.578000+00:00 slack devops-g1-uptime-probe-failing OK -> 200
+2026-09-19T08:34:16.580000+00:00 END RequestId: 977cc1c7-7e7b-4ed9-9eee-e6563b2b5895
+2026-09-19T08:34:16.580000+00:00 REPORT RequestId: 977cc1c7-7e7b-4ed9-9eee-e6563b2b5895 Duration: 123.23 ms Billed Duration: 124 ms Memory Size: 128 MB Max Memory Used: 93 MB
