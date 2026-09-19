@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import sensible from '@fastify/sensible';
 import { trace } from '@opentelemetry/api';
 import { healthPlugin } from '@tillflow/shared/health';
+import { routePrefixRewrite } from '@tillflow/shared/routePrefix';
 import { serviceAuthPlugin } from '@tillflow/shared/serviceAuth';
 import type { MpesaAdapter } from '@tillflow/mpesa';
 import type { Db } from './db.js';
@@ -35,6 +36,10 @@ export interface BuildAppOptions {
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const now = opts.now ?? (() => new Date());
   const app = Fastify({
+    // The edge forwards `/payments/...` and the rewritten `/callbacks/...`
+    // unchanged; strip our prefix before routing. See
+    // @tillflow/shared/routePrefix.
+    rewriteUrl: routePrefixRewrite('payments'),
     logger:
       opts.logger === false
         ? false
