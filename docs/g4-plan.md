@@ -26,7 +26,7 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 | - | --------- | ----- | ---------- | ------ |
 | 2.1 | Uncertain payment (Daraja timeout) | **Nebyat** | `payments` deployed | not started |
 | 2.2 | Callback replay / reorder | **Nebyat** | `payments` deployed | not started |
-| 2.3 / 2.8 | Platform failure — worker down / DLQ backlog | **Rigbe** | `pos-worker` deployed | ready to run |
+| 2.3 / 2.8 | Platform failure — worker down / DLQ backlog | **Rigbe** | `pos-worker` deployed (✅ 2026-09-19) | ready to run — next |
 | 2.4 | Broken release — rollback | **Meron** | any service deployed | not started |
 | 2.5 | Restore from backup | **Meron** | none (RDS is already up) | not started |
 | 2.6 | External probe (canary) failing | **Meron** | canary live (✅ confirmed) | not started |
@@ -38,14 +38,14 @@ Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of
 table above: a Grafana dashboard export, a k6 analysis with the highest sustained RPS,
 and one timed game-day drill with a firing + recovery Slack alert.
 
-## 3. Current real state (as of 2026-09-19 — re-check before trusting this)
+## 3. Current real state (as of 2026-09-19, updated mid-session — re-check before trusting this)
 
 Confirmed via `aws ecs describe-services` / `aws cloudwatch describe-alarms`, not assumed:
 
 | Service | Desired | Running |
 | ------- | ------- | ------- |
 | `pos` | 2 | 2 |
-| `pos-worker` | 0 | 0 |
+| `pos-worker` | 1 | 1 — fixed 2026-09-19, was silently running `busybox` (`docs/scar-log.md`) |
 | `payments` | 0 | 0 |
 | `commission` | 0 | 0 |
 | `web` | 0 | 0 |
