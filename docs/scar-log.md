@@ -18,6 +18,62 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+
+### 2026-09-19 — pos-worker silently ran busybox for who knows how long; a stale local checkout nearly reverted the real pos deploy too
+- **Area:** infra (ECS task definitions, `lifecycle.ignore_changes`)
+- **What happened:** Starting the G4 worker-down drill, `./infra/scripts/deploy.sh
+  pos-worker` failed (no `services/pos-worker/Dockerfile` — expected, `infra/worker.tf`
+  documents that `pos-worker` reuses `pos`'s own image with a different container
+  `command`). Scaling `devops-g1-pos-worker` up directly via `aws ecs update-service
+  --desired-count 1` instead, the task exited immediately, exit code 127 ("command not
+  found"). `aws ecs describe-task-definition` on the live revision showed
+  `image: public.ecr.aws/docker/library/busybox:1.36` — the raw ECS placeholder, which
+  obviously has no `node` binary. `pos-worker`'s task definition was Terraform-managed,
+  registered back when `local.service_image["pos"]` was still empty, and nothing had ever
+  cut the running *service* over to a newer, correct revision.
+  While investigating with `terraform plan` (deliberately run before `apply`, per this
+  project's own safety practice — see below), the plan proposed **reverting `pos`'s
+  currently-working real deployment back to `busybox` too**, along with the migration task
+  definition. Root cause: `infra/terraform.tfvars` (gitignored, holds the real deployed
+  image digests, written only by a *successful* `deploy.sh` run) did not exist at all on
+  this machine — a fresh checkout never gets it. With it missing, Terraform read every
+  `service_images` entry as empty and proposed reverting everything to match. **This
+  plan was not applied.**
+- **Impact:** No production impact from the `pos` near-miss — caught by reviewing the
+  plan before applying, not after. Real impact: `pos-worker` had been silently
+  non-functional since it was first created — `sale.paid` events had no real consumer for
+  an unknown period, discovered only because this G4 drill went looking for a target to
+  scale down, not because anything alerted on it.
+- **Root cause:** Two compounding gaps, not one:
+  1. `aws_ecs_service`'s `lifecycle { ignore_changes = [task_definition, desired_count] }`
+     (present on both `pos` and `pos-worker`, and correct — it's what lets `deploy.sh`
+     patch a running service without Terraform fighting it) also means Terraform will
+     **never** automatically cut a service over to a newer task-definition revision it
+     itself registers. A `terraform apply` can create a fully correct revision N and the
+     live service will happily keep running revision N-8 forever, with nothing surfacing
+     the drift.
+  2. `infra/terraform.tfvars` is gitignored by design (a committed image digest would
+     break the G5 destroy/rebuild), which also means it silently doesn't exist on any
+     machine that didn't personally run a successful `deploy.sh` — there's no error, no
+     warning, just `service_images` quietly defaulting to empty and every real image
+     looking unset.
+- **Fix:** Reconstructed `infra/terraform.tfvars` by hand from the one fact known for
+  certain (`pos`'s live image digest, confirmed via a real `/version` call against the
+  deployed edge) before touching Terraform again. Re-ran `terraform plan` — clean, no
+  changes, confirming the task-definition resource (revision 11) already had the correct
+  image. Manually cut `pos-worker`'s service over with `aws ecs update-service
+  --task-definition devops-g1-pos-worker:11` — the same kind of direct API call
+  `deploy.sh` itself uses, since Terraform structurally can't do this cutover on its own.
+  Confirmed running (`1/1`) afterward.
+- **Prevention:** Always run `terraform plan` and actually read it before `apply` — this
+  session's standing practice, and it's exactly what caught this before it became a real
+  incident instead of a scar-log entry about a near-miss. Beyond that: this repo has no
+  automated check that a Terraform-registered task-definition revision actually matches
+  what a service is *running* — `docs/g4-plan.md`'s worker-down drill exists partly to
+  surface exactly this kind of silent drift by demanding something be scaled and observed
+  for real, not just declared.
+- **Owner:** Rigbe
+=======
 ### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
 - **Area:** services/commission (worker), infra (scheduler)
 - **What happened:** `devops-g1-commission-payout-age` fired on a real backlog — 4 messages,
@@ -63,6 +119,7 @@ incident or painful surprise. Blameless. Newest first.
   section and, longer term, a check that every business day since the last close has a
   ledger row.
 - **Owner:** Nebyat
+
 
 ### 2026-09-18 — DEV_AUTH_ENABLED defaulted open, chaining with the unauthenticated tenant bootstrap into a credential-free owner JWT
 - **Area:** services/pos (auth), infra (task env)

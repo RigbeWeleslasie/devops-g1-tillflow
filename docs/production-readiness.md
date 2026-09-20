@@ -38,6 +38,8 @@
 - ☐ Caching before/after comparison
 
 ## Resilience / recovery
+See `docs/g4-plan.md` for the actual execution plan (ownership, sequencing, current real
+AWS state, definition of done) — this section stays a checklist, not a duplicate of it.
 - ☐ RTO/RPO documented and **tested + timed** (`runbook.md`)
 - ☐ Uncertain-payment drill (timeout → pending → reconcile → no double charge)
 - ☐ Callback replay drill (one transition, one ledger effect, explanatory trace)
