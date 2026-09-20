@@ -18,6 +18,7 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+
 ### 2026-09-19 — pos-worker silently ran busybox for who knows how long; a stale local checkout nearly reverted the real pos deploy too
 - **Area:** infra (ECS task definitions, `lifecycle.ignore_changes`)
 - **What happened:** Starting the G4 worker-down drill, `./infra/scripts/deploy.sh
@@ -72,6 +73,53 @@ incident or painful surprise. Blameless. Newest first.
   surface exactly this kind of silent drift by demanding something be scaled and observed
   for real, not just declared.
 - **Owner:** Rigbe
+=======
+### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
+- **Area:** services/commission (worker), infra (scheduler)
+- **What happened:** `devops-g1-commission-payout-age` fired on a real backlog — 4 messages,
+  oldest ~3.6 days, DLQ empty, nothing consuming because `commission` sat at
+  `desiredCount 0` behind the deploy gate that was rolling itself back (previous entry).
+  The alarm was doing its job. Tracing what would happen when the queue finally drained
+  turned up a worse problem than the backlog.
+
+  The scheduler's message carried no time (`infra/data.tf`: `{type, source}` only), so
+  `businessDayFor` fell back to `businessDayToClose(now())` — the wall clock at
+  **processing** time. Four triggers consumed within seconds of each other would all have
+  resolved to the same business day: one real close, three idempotent no-op replays, and
+  the three older business days never closed at all.
+- **Impact:** None realised — caught before `commission` was scaled up, and those days had
+  no sales to pay. Had it drained with real data, three days of commission would simply
+  not exist, with no error anywhere.
+- **Root cause:** The day was derived from when the worker *got around to* the trigger
+  rather than from when the trigger was *due*. That is correct only for a trigger consumed
+  promptly, which is exactly the case where it does not matter. The longer the backlog, the
+  more wrong the answer — and a backlog is the only time the question is asked.
+
+  What made it invisible is I4 working as designed: `INSERT ... ON CONFLICT DO NOTHING` on
+  `UNIQUE(tenant_id, attendant_id, business_day)` means a replay is indistinguishable from
+  a successful close. Queue drains, every trigger acks, alarm clears, and the only trace is
+  an absence — ledger rows that were never written. Idempotency protected us from paying
+  twice and hid us not paying at all.
+- **Fix:** The trigger now carries `scheduledFor` (`<aws.scheduler.scheduled-time>`, which
+  EventBridge Scheduler substitutes with the instant the schedule was due), and
+  `resolveBusinessDay` prefers an explicit `businessDay`, then `scheduledFor`, then the wall
+  clock. A `scheduledFor` in the future is refused: it would name a day that has not ended,
+  and paying commission on a partial day is permanent — the ledger's uniqueness constraint
+  means the rest of that day can never be paid.
+- **Prevention:** Seven tests in `services/commission/test/worker.test.ts`, including four
+  backlogged triggers resolving to four distinct days and an end-to-end run through the real
+  worker proving the ledger row lands on the day that was due. Both halves falsified:
+  removing the `scheduledFor` branch fails four tests, removing the future guard fails
+  exactly one. A trigger arriving with no `scheduledFor` now logs a warning rather than
+  quietly picking a day, so the old behaviour cannot return silently.
+- **Still open:** a trigger that ages out of the queue (retention is 4 days) leaves its day
+  unclosed with nothing in the DLQ, because expiry is not a delivery failure. `scheduledFor`
+  cannot help a message that no longer exists. Recovery is a manual
+  `npm run close --workspace=@tillflow/commission -- --day YYYY-MM-DD`; worth a runbook
+  section and, longer term, a check that every business day since the last close has a
+  ledger row.
+- **Owner:** Nebyat
+
 
 ### 2026-09-18 — DEV_AUTH_ENABLED defaulted open, chaining with the unauthenticated tenant bootstrap into a credential-free owner JWT
 - **Area:** services/pos (auth), infra (task env)

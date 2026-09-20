@@ -415,9 +415,25 @@ resource "aws_scheduler_schedule" "daily_close" {
     arn      = aws_sqs_queue.main["commission-payout"].arn
     role_arn = aws_iam_role.scheduler.arn
 
+    # `scheduledFor` is what makes a delayed trigger close the RIGHT day.
+    #
+    # The worker used to derive the business day from its own wall clock at
+    # processing time (services/commission/src/workers/closeWorker.ts). That is
+    # correct only for a trigger consumed promptly. While `commission` sat at
+    # desiredCount 0, four triggers queued up -- and every one of them would
+    # have resolved to the same day the moment the worker started: one real
+    # close, three idempotent no-op replays, three business days never closed
+    # and nothing looking wrong, because a replay is indistinguishable from
+    # success.
+    #
+    # `<aws.scheduler.scheduled-time>` is substituted by EventBridge Scheduler
+    # with the instant this schedule was DUE, so the day survives any backlog.
+    # jsonencode leaves the angle brackets alone; the substitution happens in
+    # the Scheduler service, not in Terraform.
     input = jsonencode({
-      type   = "daily_close"
-      source = "eventbridge-scheduler"
+      type         = "daily_close"
+      source       = "eventbridge-scheduler"
+      scheduledFor = "<aws.scheduler.scheduled-time>"
     })
 
     retry_policy {

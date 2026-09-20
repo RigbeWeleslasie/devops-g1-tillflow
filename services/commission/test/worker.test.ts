@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { createTestDb } from './testDb.js';
 import { FakePosClient, FakePaymentsClient, tenantWith } from './fakes.js';
 import { FakeTriggerSource } from '../src/workers/sqsTriggerSource.js';
-import { businessDayFor, runOnce } from '../src/workers/closeWorker.js';
+import { businessDayFor, resolveBusinessDay, runOnce } from '../src/workers/closeWorker.js';
 import { businessDayToClose } from '../src/services/businessDay.js';
 import type { Db } from '../src/db.js';
 
@@ -153,5 +153,125 @@ describe('processing a trigger', () => {
       .sort();
     assert.deepEqual(days, ['2026-08-01', '2026-09-14']);
     assert.equal(h.payments.disbursements.size, 2, 'two different days, two payouts — not a duplicate');
+  });
+});
+
+describe('a backlogged trigger closes the day it was DUE, not the day it was consumed', () => {
+  /**
+   * The regression. `commission` sat at desiredCount 0 for four days while the
+   * deploy gate rolled itself back, and four daily-close triggers queued up
+   * behind it. Deriving the business day from the wall clock at PROCESSING
+   * time made every one of them resolve to the same day the moment the worker
+   * started: one real close, three no-op replays, and three business days that
+   * were never closed.
+   *
+   * Nothing would have looked wrong. The queue drains, every trigger acks, the
+   * age alarm clears, and a replay is indistinguishable from a successful
+   * close. The only trace is an absence — ledger rows that do not exist.
+   */
+
+  /** 11:00 EAT on the 19th: the worker finally starts, four days late. */
+  const DRAIN_TIME = new Date('2026-09-19T11:00:00+03:00');
+  const scheduled = (day: string): string => `${day}T00:15:00+03:00`;
+
+  test('scheduledFor decides the day, and the wall clock does not get a say', () => {
+    // Due 00:15 EAT on the 15th (settling the 14th), consumed on the 19th.
+    const body = { type: 'daily_close', scheduledFor: scheduled('2026-09-15') };
+    assert.equal(businessDayFor(body, DRAIN_TIME), '2026-09-14');
+    assert.notEqual(
+      businessDayFor(body, DRAIN_TIME),
+      businessDayToClose(DRAIN_TIME),
+      'the whole point: four days late, and still the right day',
+    );
+  });
+
+  test('four backlogged triggers close four different days, not the same one four times', () => {
+    const days = ['2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19'].map((due) =>
+      businessDayFor({ type: 'daily_close', scheduledFor: scheduled(due) }, DRAIN_TIME),
+    );
+    assert.deepEqual(days, ['2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']);
+    assert.equal(new Set(days).size, 4, 'four distinct days — this is the bug, stated as an assertion');
+  });
+
+  test('and it holds through the real worker: the ledger row lands on the day that was due', async () => {
+    const { db } = createTestDb();
+    const pos = new FakePosClient();
+    // Sales on the 16th. Nothing on the 18th, the day the wall clock would pick.
+    pos.setDay('2026-09-16', [tenantWith({ saleTotals: [100_000] })]);
+    const payments = new FakePaymentsClient(db);
+    const source = new FakeTriggerSource();
+
+    source.publish({ type: 'daily_close', scheduledFor: scheduled('2026-09-17') }, 'backlogged');
+    await runOnce({ db, pos, payments, source, now: () => DRAIN_TIME });
+
+    const rows = await db.query<{ business_day: string | Date }>('SELECT business_day FROM payout_ledger');
+    assert.equal(rows.rowCount, 1, 'the 16th was closed');
+    const day = rows.rows[0]!.business_day;
+    assert.equal(
+      day instanceof Date ? day.toISOString().slice(0, 10) : String(day).slice(0, 10),
+      '2026-09-16',
+    );
+    assert.equal(payments.disbursements.size, 1, "and the attendant was paid for the day they worked");
+  });
+
+  test('an explicit businessDay still wins — a drill is not second-guessed', () => {
+    assert.equal(
+      businessDayFor(
+        { type: 'daily_close', businessDay: '2026-08-01', scheduledFor: scheduled('2026-09-15') },
+        DRAIN_TIME,
+      ),
+      '2026-08-01',
+    );
+  });
+
+  test('an unusable scheduledFor falls back to the wall clock rather than throwing', () => {
+    for (const bad of ['', 'yesterday', 'not-a-date', null, 42, {}, undefined]) {
+      assert.equal(
+        businessDayFor({ type: 'daily_close', scheduledFor: bad }, DRAIN_TIME),
+        businessDayToClose(DRAIN_TIME),
+        `scheduledFor=${JSON.stringify(bad)} must degrade, not crash`,
+      );
+    }
+  });
+
+  test('a scheduledFor in the FUTURE is refused — closing a day still in progress is unrecoverable', () => {
+    // A clock we cannot explain would name a day that has not finished. Paying
+    // commission on a partial day is permanent: UNIQUE(tenant, attendant,
+    // business_day) means the rest of that day's sales can never be paid.
+    const tomorrow = new Date(DRAIN_TIME.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    assert.equal(
+      businessDayFor({ type: 'daily_close', scheduledFor: tomorrow }, DRAIN_TIME),
+      businessDayToClose(DRAIN_TIME),
+      'falls back to the wall clock, which is at least a day that has ended',
+    );
+  });
+
+  test('resolveBusinessDay reports how it decided, so a close can be audited', () => {
+    const at = DRAIN_TIME;
+    assert.equal(resolveBusinessDay({ businessDay: '2026-08-01' }, at).source, 'explicit');
+    assert.equal(resolveBusinessDay({ scheduledFor: scheduled('2026-09-15') }, at).source, 'scheduled');
+    assert.equal(resolveBusinessDay({ type: 'daily_close' }, at).source, 'processing-time');
+    assert.equal(resolveBusinessDay(null, at).source, 'processing-time');
+  });
+
+  test('a trigger with no scheduledFor warns, because the day it picked may be wrong', async () => {
+    const { db } = createTestDb();
+    const pos = new FakePosClient();
+    const payments = new FakePaymentsClient(db);
+    const source = new FakeTriggerSource();
+    const warnings: string[] = [];
+    const logger = {
+      info: () => {},
+      warn: (_o: object, m?: string) => warnings.push(m ?? ''),
+      error: () => {},
+    };
+
+    source.publish({ type: 'daily_close' }, 'legacy');
+    await runOnce({ db, pos, payments, source, now: () => DRAIN_TIME, logger });
+
+    assert.ok(
+      warnings.some((w) => w.includes('scheduledFor')),
+      'the operator has to know the close may have skipped days; silence would hide it',
+    );
   });
 });
