@@ -9,9 +9,9 @@
 # G3 blockers this addresses:
 #   - "no external probe"   -> aws_lambda_function.uptime (outside the VPC)
 #   - "no actionable alert" -> alarm -> SNS -> Slack (firing AND recovery)
-#   - "no per-service budget" -> burn-rate alarms, once services emit the SLI
-#     counters the shared OTel bootstrap now supports. Until then the per-service
-#     ALB/ECS alarms below are the budget proxy, one alarm set per service.
+#   - "no per-service budget" -> multi-window burn-rate alarms bound to the SLI
+#     counters (bottom of this file), plus per-service ALB/ECS/SQS/RDS alarms
+#     covering the failure modes the SLIs do not.
 
 # ---------------------------------------------------------------------------
 # External uptime probe
@@ -960,5 +960,497 @@ resource "aws_grafana_workspace" "main" {
     Name    = local.prefix
     service = "platform"
     owner   = "meron"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Error-budget burn-rate alarms (G3 review, P1)
+#
+# The review's finding was exact: the multi-window burn-rate policy is fully
+# specified in docs/slo-error-budgets.md and the SLI counters reach CloudWatch,
+# but no alarm read them -- so the budget existed on paper and as metrics, and
+# was not enforced. These alarms close that loop.
+#
+# Two documents own the numbers here and neither is this file:
+#   - docs/slo-error-budgets.md (Rigbe, Area 4) -- targets, and the 14.4x/6x
+#     multi-window policy.
+#   - evidence/payments-integrity/metrics.md (Nebyat) -- which label values are
+#     `good`, which are `bad`, and which are excluded from both halves.
+# Changing a threshold or a label mapping means changing those, then this.
+#
+# Three constraints discovered against the live account, all of which shape the
+# math below (the last two were flagged in metrics.md and confirmed here):
+#
+#   1. The namespace is `TillFlow`, FLAT -- not `TillFlow/<service>`. The awsemf
+#      exporter (ecs.tf) publishes there. Services are told apart by the
+#      `OTelLib` dimension (`@tillflow/pos`), which is the instrumentation scope
+#      name, NOT `service.name`. An alarm written against `TillFlow/pos` or
+#      against a `service.name` dimension sits in INSUFFICIENT_DATA forever.
+#
+#   2. `dimension_rollup_option = "NoDimensionRollup"` means there is no
+#      pre-aggregated "all results" series. The denominator has to be built by
+#      summing each `result` series explicitly -- hence the metric math below
+#      rather than a single metric with a Sum statistic.
+#
+#   3. A series only exists once it has been emitted at least once. A service
+#      that has never returned `result=error` has no such series, and metric
+#      math over a missing series yields no data rather than zero. That is why
+#      every burn-rate alarm here sets `treat_missing_data = "notBreaching"`:
+#      "we have not seen an error yet" must not read as a breach.
+# ---------------------------------------------------------------------------
+
+locals {
+  # Burn rate = error_rate / (1 - target). Alarming on burn >= N is the same as
+  # alarming on error_rate >= N * (1 - target), and expressing it that way keeps
+  # the CloudWatch expression to one division instead of two.
+  #
+  # POS target 99.9% -> budget 0.001
+  #   fast: 14.4 * 0.001 = 0.0144  (1.44% of sale writes failing)
+  #   slow:  6.0 * 0.001 = 0.006   (0.6%)
+  pos_fast_burn_error_rate = 14.4 * (1 - 0.999)
+  pos_slow_burn_error_rate = 6.0 * (1 - 0.999)
+
+  # The instrumentation scope name OpenTelemetry stamps on the metric; it is
+  # how CloudWatch tells the four services apart inside the one namespace.
+  otel_scope = {
+    pos        = "@tillflow/pos"
+    payments   = "@tillflow/payments"
+    commission = "@tillflow/commission"
+  }
+}
+
+# --- POS: fast burn (page) -------------------------------------------------
+#
+# docs/slo-error-budgets.md POS row: a valid sale write that returns the correct
+# response and results in exactly one row is a success -- and an idempotent
+# replay returning the first response counts as success, explicitly. So `ok`,
+# `idempotent` and `unique_violation` are all in the numerator: the last is the
+# same correct outcome as `idempotent`, reached through a concurrent race that
+# the composite primary key resolved (services/pos/src/metrics.ts).
+#
+# There is no `result=error` value today -- POS records nothing for a 4xx,
+# because the SLO excludes client errors from both halves. The `bad` series is
+# therefore whatever future outcome is added as not-good; the math is written so
+# that adding one starts burning budget without editing this alarm.
+resource "aws_cloudwatch_metric_alarm" "pos_fast_burn" {
+  alarm_name          = "${local.prefix}-pos-budget-fast-burn"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = local.pos_fast_burn_error_rate
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+
+  # The policy requires burn >= 14.4x over 1h AND over 5m, so that a short
+  # spike does not page and a slow bleed does not hide. CloudWatch cannot
+  # express a two-window AND in one metric alarm, so each window is its own
+  # alarm and the composite below does the AND.
+  metric_query {
+    id          = "error_rate_1h"
+    expression  = "IF(total > 0, bad / total, 0)"
+    label       = "POS sale-write error rate (1h)"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "bad"
+    expression = "SUM(REMOVE_EMPTY([err]))"
+    label      = "failed sale writes"
+  }
+
+  metric_query {
+    id         = "total"
+    expression = "SUM(REMOVE_EMPTY([ok, idem, uniq, err]))"
+    label      = "eligible sale writes"
+  }
+
+  dynamic "metric_query" {
+    for_each = {
+      ok   = "ok"
+      idem = "idempotent"
+      uniq = "unique_violation"
+      err  = "error"
+    }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        metric_name = "pos_sale_write_total"
+        namespace   = "TillFlow"
+        period      = 3600
+        stat        = "Sum"
+
+        dimensions = {
+          result  = metric_query.value
+          OTelLib = local.otel_scope["pos"]
+        }
+      }
+    }
+  }
+
+  alarm_description = jsonencode({
+    environment  = var.environment
+    service      = "pos"
+    symptom      = "POS is burning its error budget 14.4x faster than sustainable (1h window)."
+    impact       = "At this rate the entire 28-day budget is gone in ~2 days. Sale writes are failing for real attendants."
+    observed     = "pos_sale_write_total error rate >= ${format("%.2f", local.pos_fast_burn_error_rate * 100)}% over 1h (target 99.9%)."
+    runbook      = "docs/runbook.md#210-error-budget-burn"
+    owner        = local.service_owner["pos"]
+    first_action = "This is a page, not a ticket. Check whether a deploy preceded it (/version vs last-good digest) and roll back if so. If not, check RDS health and the pos_sale_write_total{result} breakdown -- unique_violation rising alone is a concurrency signal, not an outage."
+  })
+
+  alarm_actions = local.alert_topic
+  ok_actions    = local.alert_topic
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-fast-burn"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+# --- POS: fast burn, short window ------------------------------------------
+#
+# The 5m half of the fast-burn pair. Exists to be ANDed by the composite alarm;
+# it deliberately does NOT publish to SNS on its own, or every brief spike would
+# page while the 1h window is still well inside budget.
+resource "aws_cloudwatch_metric_alarm" "pos_fast_burn_short" {
+  alarm_name          = "${local.prefix}-pos-budget-fast-burn-5m"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = local.pos_fast_burn_error_rate
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id          = "error_rate_5m"
+    expression  = "IF(total > 0, bad / total, 0)"
+    label       = "POS sale-write error rate (5m)"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "bad"
+    expression = "SUM(REMOVE_EMPTY([err]))"
+    label      = "failed sale writes"
+  }
+
+  metric_query {
+    id         = "total"
+    expression = "SUM(REMOVE_EMPTY([ok, idem, uniq, err]))"
+    label      = "eligible sale writes"
+  }
+
+  dynamic "metric_query" {
+    for_each = {
+      ok   = "ok"
+      idem = "idempotent"
+      uniq = "unique_violation"
+      err  = "error"
+    }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        metric_name = "pos_sale_write_total"
+        namespace   = "TillFlow"
+        period      = 300
+        stat        = "Sum"
+
+        dimensions = {
+          result  = metric_query.value
+          OTelLib = local.otel_scope["pos"]
+        }
+      }
+    }
+  }
+
+  alarm_description = "Short-window half of the POS fast-burn pair. Not routed to Slack on its own -- see ${local.prefix}-pos-budget-fast-burn-page."
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-fast-burn-5m"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+# --- POS: the actual page --------------------------------------------------
+#
+# Google's multi-window rule: alert only when BOTH the long and short windows
+# are burning. The long window is the signal; the short window is what stops a
+# recovered incident from alerting for another hour.
+resource "aws_cloudwatch_composite_alarm" "pos_fast_burn_page" {
+  alarm_name = "${local.prefix}-pos-budget-fast-burn-page"
+
+  alarm_rule = join(" AND ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.pos_fast_burn.alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.pos_fast_burn_short.alarm_name})",
+  ])
+
+  alarm_description = jsonencode({
+    environment  = var.environment
+    service      = "pos"
+    symptom      = "POS fast burn: error budget consuming at >= 14.4x over BOTH the 1h and 5m windows."
+    impact       = "~2% of the 28-day budget per hour. Page the area DRI; this is an incident."
+    observed     = "Both ${local.prefix}-pos-budget-fast-burn and -5m are in ALARM."
+    runbook      = "docs/runbook.md#210-error-budget-burn"
+    owner        = local.service_owner["pos"]
+    first_action = "Start an incident. Consider rollback or a feature flag before debugging -- docs/slo-error-budgets.md's fast-burn row says stop the burn first."
+  })
+
+  alarm_actions = local.alert_topic
+  ok_actions    = local.alert_topic
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-fast-burn-page"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+# --- POS: slow burn (ticket) -----------------------------------------------
+#
+# 6x over 6h AND over 30m. Same two-window structure as the page, different
+# thresholds and a different action: docs/slo-error-budgets.md routes this to a
+# Slack ticket for same-day investigation, not a page. A slow burn is the one
+# that quietly eats a month of budget without any single hour looking alarming.
+resource "aws_cloudwatch_metric_alarm" "pos_slow_burn" {
+  alarm_name          = "${local.prefix}-pos-budget-slow-burn"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = local.pos_slow_burn_error_rate
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id          = "error_rate_6h"
+    expression  = "IF(total > 0, bad / total, 0)"
+    label       = "POS sale-write error rate (6h)"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "bad"
+    expression = "SUM(REMOVE_EMPTY([err]))"
+    label      = "failed sale writes"
+  }
+
+  metric_query {
+    id         = "total"
+    expression = "SUM(REMOVE_EMPTY([ok, idem, uniq, err]))"
+    label      = "eligible sale writes"
+  }
+
+  dynamic "metric_query" {
+    for_each = {
+      ok   = "ok"
+      idem = "idempotent"
+      uniq = "unique_violation"
+      err  = "error"
+    }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        metric_name = "pos_sale_write_total"
+        namespace   = "TillFlow"
+        # 6h. CloudWatch caps a metric-math period at 1 day, so this is fine,
+        # but note it also means the alarm cannot evaluate faster than 6h --
+        # which is the point: this is the window, not the sampling rate.
+        period = 21600
+        stat   = "Sum"
+
+        dimensions = {
+          result  = metric_query.value
+          OTelLib = local.otel_scope["pos"]
+        }
+      }
+    }
+  }
+
+  alarm_description = "Long-window half of the POS slow-burn pair. Not routed to Slack on its own -- see ${local.prefix}-pos-budget-slow-burn-ticket."
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-slow-burn"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "pos_slow_burn_short" {
+  alarm_name          = "${local.prefix}-pos-budget-slow-burn-30m"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = local.pos_slow_burn_error_rate
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id          = "error_rate_30m"
+    expression  = "IF(total > 0, bad / total, 0)"
+    label       = "POS sale-write error rate (30m)"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "bad"
+    expression = "SUM(REMOVE_EMPTY([err]))"
+    label      = "failed sale writes"
+  }
+
+  metric_query {
+    id         = "total"
+    expression = "SUM(REMOVE_EMPTY([ok, idem, uniq, err]))"
+    label      = "eligible sale writes"
+  }
+
+  dynamic "metric_query" {
+    for_each = {
+      ok   = "ok"
+      idem = "idempotent"
+      uniq = "unique_violation"
+      err  = "error"
+    }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        metric_name = "pos_sale_write_total"
+        namespace   = "TillFlow"
+        period      = 1800
+        stat        = "Sum"
+
+        dimensions = {
+          result  = metric_query.value
+          OTelLib = local.otel_scope["pos"]
+        }
+      }
+    }
+  }
+
+  alarm_description = "Short-window half of the POS slow-burn pair. Not routed to Slack on its own -- see ${local.prefix}-pos-budget-slow-burn-ticket."
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-slow-burn-30m"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+resource "aws_cloudwatch_composite_alarm" "pos_slow_burn_ticket" {
+  alarm_name = "${local.prefix}-pos-budget-slow-burn-ticket"
+
+  alarm_rule = join(" AND ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.pos_slow_burn.alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.pos_slow_burn_short.alarm_name})",
+  ])
+
+  alarm_description = jsonencode({
+    environment  = var.environment
+    service      = "pos"
+    symptom      = "POS slow burn: error budget consuming at >= 6x over BOTH the 6h and 30m windows."
+    impact       = "~5% of the 28-day budget per 6h. Not a page, but it ends the month over budget if left."
+    observed     = "Both ${local.prefix}-pos-budget-slow-burn and -30m are in ALARM."
+    runbook      = "docs/runbook.md#210-error-budget-burn"
+    owner        = local.service_owner["pos"]
+    first_action = "Investigate today, not now. Break pos_sale_write_total down by result: a steady unique_violation rate is concurrency, a steady error rate is a dependency. Neither needs a rollback unless it started at a deploy."
+  })
+
+  alarm_actions = local.alert_topic
+  ok_actions    = local.alert_topic
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-slow-burn-ticket"
+    service = "pos"
+    owner   = local.service_owner["pos"]
+  }
+}
+
+# --- POS: budget remaining < 25% (release freeze) --------------------------
+#
+# The freeze trigger from docs/slo-error-budgets.md. Distinct from burn RATE:
+# this is cumulative consumption over the whole 28-day window, so it fires on
+# "we have spent too much" regardless of how fast we are spending right now.
+#
+# 28 days is 2,419,200s, far beyond CloudWatch's 1-day metric-math period cap,
+# so the window is approximated with a 1-day period and 28 evaluation periods:
+# the alarm fires when the error rate has averaged above the budget line for 28
+# consecutive days' worth of datapoints. That is the closest a metric alarm gets
+# to a rolling 28-day budget without a Lambda computing it; the exact figure
+# belongs on the Grafana budget panel, which reads the same series.
+resource "aws_cloudwatch_metric_alarm" "pos_budget_low" {
+  alarm_name          = "${local.prefix}-pos-budget-below-25pct"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  # 75% of a 0.1% budget consumed == a sustained error rate of 0.075%.
+  threshold           = 0.75 * (1 - 0.999)
+  evaluation_periods  = 28
+  datapoints_to_alarm = 28
+  treat_missing_data  = "notBreaching"
+
+  metric_query {
+    id          = "error_rate_28d"
+    expression  = "IF(total > 0, bad / total, 0)"
+    label       = "POS sale-write error rate (daily, 28d window)"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "bad"
+    expression = "SUM(REMOVE_EMPTY([err]))"
+    label      = "failed sale writes"
+  }
+
+  metric_query {
+    id         = "total"
+    expression = "SUM(REMOVE_EMPTY([ok, idem, uniq, err]))"
+    label      = "eligible sale writes"
+  }
+
+  dynamic "metric_query" {
+    for_each = {
+      ok   = "ok"
+      idem = "idempotent"
+      uniq = "unique_violation"
+      err  = "error"
+    }
+
+    content {
+      id = metric_query.key
+
+      metric {
+        metric_name = "pos_sale_write_total"
+        namespace   = "TillFlow"
+        period      = 86400
+        stat        = "Sum"
+
+        dimensions = {
+          result  = metric_query.value
+          OTelLib = local.otel_scope["pos"]
+        }
+      }
+    }
+  }
+
+  alarm_description = jsonencode({
+    environment  = var.environment
+    service      = "pos"
+    symptom      = "POS has consumed more than 75% of its 28-day error budget."
+    impact       = "Release freeze on pos: only reliability fixes and rollbacks merge until the budget recovers above 50%."
+    observed     = "Sale-write error rate sustained above ${format("%.3f", 0.75 * (1 - 0.999) * 100)}% across the 28-day window (target 99.9%)."
+    runbook      = "docs/runbook.md#210-error-budget-burn"
+    owner        = local.service_owner["pos"]
+    first_action = "Announce the freeze in the group channel, then stop shipping features to pos. docs/slo-error-budgets.md's budget policy says the freeze lifts when the rolling window recovers above 50%, not when someone judges it fixed."
+  })
+
+  alarm_actions = local.alert_topic
+  ok_actions    = local.alert_topic
+
+  tags = {
+    Name    = "${local.prefix}-pos-budget-below-25pct"
+    service = "pos"
+    owner   = local.service_owner["pos"]
   }
 }
