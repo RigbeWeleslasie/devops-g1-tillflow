@@ -32,6 +32,12 @@ export interface PaymentsConfig {
   reconcileIntervalMs: number;
   /** Past this many queries, a still-PENDING charge is alerted on, never auto-failed. */
   reconcileMaxAttempts: number;
+  /**
+   * Confirm a success callback against Daraja before any PAID transition.
+   * On unless CONFIRM_CALLBACKS=false -- an explicit opt-OUT, because the
+   * failure mode of getting this wrong is paying out on a forged callback.
+   */
+  confirmCallbacks: boolean;
   outboxIntervalMs: number;
   saleEventsQueueUrl: string | undefined;
   awsRegion: string;
@@ -74,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PaymentsConfig
     reconcileAfterMs: intEnv(env, 'RECONCILE_AFTER_MS', 2 * 60_000),
     reconcileIntervalMs: intEnv(env, 'RECONCILE_INTERVAL_MS', 5 * 60_000),
     reconcileMaxAttempts: intEnv(env, 'RECONCILE_MAX_ATTEMPTS', 12),
+    confirmCallbacks: env['CONFIRM_CALLBACKS'] !== 'false',
     outboxIntervalMs: intEnv(env, 'OUTBOX_INTERVAL_MS', 1_000),
     saleEventsQueueUrl: env['SALE_EVENTS_QUEUE_URL'],
     awsRegion: env['AWS_REGION'] ?? 'us-east-1',

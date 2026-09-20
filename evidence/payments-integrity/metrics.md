@@ -71,6 +71,8 @@ timer starts **before** parsing, so a malformed body is timed too.
 | `unmatched` | No charge/payout carries this reference (threat-model A2). Stored, not applied. | **excluded**; worth its own panel — a rising rate is spoofing or a lost reference |
 | `held` | The payment did not reach a terminal state and needs a human: amount mismatch (A1), or a B2C queue timeout. **Real money in limbo.** | denominator, **error** |
 | `not_applied` | Matched, but the charge was already terminal. Correct dedupe. | numerator + denominator |
+| `contradicted` | The callback claimed success and Daraja's own records said otherwise (G5's confirming query). Changes no state. | denominator, **error** — and the one that should page: nothing legitimate produces it |
+| `unconfirmed` | Daraja could not be reached, or does not know yet, so the PAID transition was withheld and the charge left to the reconciler. | denominator; **not** an error — I5 applied to the callback path — but a rising rate means payments are settling late |
 | `malformed` | Unparseable body, answered 400. | **excluded** |
 
 `held` and `not_applied` are the pair to get right. On the outcome object they are
@@ -184,8 +186,8 @@ Found while checking these names against `infra/`. Flagging rather than fixing �
 ## Verifying
 
 ```
-npm test --workspace=@tillflow/payments    # 105 tests, 17 of them metrics
-npm test --workspace=@tillflow/commission  #  54 tests, 14 of them metrics
+npm test --workspace=@tillflow/payments    # 116 tests, 17 of them metrics
+npm test --workspace=@tillflow/commission  #  62 tests, 14 of them metrics
 ```
 
 The metric tests drive the real routes, the real close and the real reconciler

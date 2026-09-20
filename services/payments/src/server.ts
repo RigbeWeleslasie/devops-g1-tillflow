@@ -53,6 +53,7 @@ const app = await buildApp({
   callbackBaseUrl: config.callbackBaseUrl,
   reconcileAfterMs: config.reconcileAfterMs,
   reconcileMaxAttempts: config.reconcileMaxAttempts,
+  confirmBeforePaid: config.confirmCallbacks,
 });
 
 if (adapter instanceof FakeAdapter) {

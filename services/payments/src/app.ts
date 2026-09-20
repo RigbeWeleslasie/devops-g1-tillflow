@@ -30,6 +30,12 @@ export interface BuildAppOptions {
    * created_at and the reconcile cutoff can never come from different clocks.
    */
   now?: () => Date;
+  /**
+   * Confirm a success callback against Daraja before marking a charge PAID.
+   * Defaults on. See ApplyOptions.confirmBeforePaid for why the off switch
+   * exists and what turning it off costs.
+   */
+  confirmBeforePaid?: boolean;
   logger?: boolean;
 }
 
@@ -81,7 +87,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     callbackBaseUrl: opts.callbackBaseUrl,
     now,
   });
-  await app.register(callbacksRoutes, { db: opts.db, now });
+  await app.register(callbacksRoutes, {
+    db: opts.db,
+    now,
+    // The confirming query (G5): a success callback is a notification, not
+    // evidence. Payments asks Daraja directly before any PAID transition.
+    adapter: opts.adapter,
+    ...(opts.confirmBeforePaid !== undefined ? { confirmBeforePaid: opts.confirmBeforePaid } : {}),
+  });
   await app.register(adminRoutes, {
     db: opts.db,
     adapter: opts.adapter,
