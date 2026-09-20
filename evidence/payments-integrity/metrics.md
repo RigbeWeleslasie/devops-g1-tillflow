@@ -13,24 +13,20 @@ counter`), the name below is the one now emitted.
 
 ---
 
-## Status: emitted, not yet exported
+## Status: exported
 
-Every instrument below is recorded by the services today and asserted by tests that
-run in CI. **None of it reaches CloudWatch yet**, and that is not a bug in this code:
+Every instrument below is recorded by the services, asserted by tests in CI, and
+**reaching CloudWatch** — the shared metric reader landed in #19 (`OTLPMetricExporter`
++ `PeriodicExportingMetricReader` in `services/_shared/ts/src/otel.ts`).
 
-`services/_shared/ts/src/otel.ts` configures a `traceExporter` only. There is no
-`metricReader` and no `MeterProvider`, so `@opentelemetry/api` hands back a **no-op
-meter** and every `add()` below is discarded in-process. Traces work; metrics do not
-leave the task.
+Nothing in `services/payments` or `services/commission` changed when it did: the
+instrumentation is written against `@opentelemetry/api`, which hands back a no-op
+meter until something registers a provider, exactly as `trace.getActiveSpan()` is
+used throughout both services. That was the point of writing it that way.
 
-That is Meron's `otel.ts` PR (add `OTLPMetricExporter` + `PeriodicExportingMetricReader`).
-**The moment it merges, these six start flowing with no change to `services/payments`
-or `services/commission`** — no import to add, no bootstrap to call. That is the whole
-reason the instrumentation is written against `@opentelemetry/api` rather than the
-SDK, exactly as `trace.getActiveSpan()` already is throughout both services.
-
-So the sequencing in the G3 plan holds, with one correction worth having: my half was
-**not** blocked on the shared meter. Only the *export* was.
+**Caveat that matters for the G3 review:** `payments` and `commission` sit at
+`desiredCount 0` (`infra/variables.tf`), so these instruments have never run in a
+deployed task. They are proven correct, not proven live.
 
 ---
 
@@ -154,6 +150,67 @@ Two properties that are easy to get wrong and are both tested:
   nothing, found nothing) is a real close and still counts.
 
 ---
+
+## Burn-rate alarm math (G3 review, P1)
+
+The G3 review's P1 is that the multi-window burn-rate policy is well specified and no
+alarm reads it. The alarms are Platform's (`infra/observability.tf`), but the mapping
+from *these labels* to a numerator and a denominator is mine, so here it is
+explicitly rather than left to be re-derived.
+
+### Payments — target 99.5%
+
+`docs/slo-error-budgets.md` excludes genuine business declines and malformed/spoofed
+callbacks from **both** halves, so they appear in neither expression below.
+
+| | Series |
+| --- | --- |
+| **good** | `payments_command_total{result=accepted}` + `{result=idempotent}` + `{result=uncertain}`<br>`payments_callback_process_seconds{outcome=applied_paid}` + `{outcome=duplicate}` + `{outcome=not_applied}` + `{outcome=unconfirmed}` (SampleCount) |
+| **bad** | `payments_command_total{result=rejected}` + `{result=late_ack}`<br>`payments_callback_process_seconds{outcome=held}` + `{outcome=contradicted}` (SampleCount) |
+| **excluded** | `applied_declined`, `unmatched`, `malformed` |
+
+```
+error_rate = bad / (good + bad)
+burn_rate  = error_rate / (1 - 0.995)    # i.e. error_rate / 0.005
+```
+
+| Alert | Condition | Error rate that means |
+| --- | --- | --- |
+| Fast burn (page) | burn ≥ 14.4× over 1h **and** over 5m | ≥ 7.2% |
+| Slow burn (ticket) | burn ≥ 6× over 6h **and** over 30m | ≥ 3.0% |
+
+Three label choices that matter to this math, and why:
+
+- **`uncertain` is good, not bad.** The SLO says a timeout correctly held PENDING and
+  later reconciled counts as success. Putting it in `bad` pages on M-Pesa being slow.
+  What should page is `payments_reconcile_total{outcome=needs_attention}` — a direct
+  threshold alarm, not burn-rate math, because it means we have *stopped finding out*
+  what happened to a real payment.
+- **`unconfirmed` is good.** Same reasoning one layer up: the PAID transition was
+  withheld because Daraja could not be asked, and the reconciler still owns it. Worth
+  its own low-threshold alarm (payments settling late) but it is not budget burn.
+- **`contradicted` should have its own alarm at a threshold of ≥ 1**, not just a share
+  of the burn rate. Nothing legitimate produces it; one is a signal, and waiting for it
+  to reach 7.2% of traffic is waiting far too long.
+
+### Commission — target 99.0%, and burn-rate math does not fit it
+
+The Commission SLO is *"eligible payouts terminal by 06:30 EAT"* with a 28-day budget of
+**~0.28 late runs**. There is one run a day, so a rolling window contains ~28 events and
+a single late run is already 3.5× the budget. Multi-window burn-rate math over 1h and 6h
+windows has nothing to average — most windows contain zero events.
+
+Use direct alarms instead:
+
+| Alarm | Metric | Condition |
+| --- | --- | --- |
+| Close ran late | `commission_run_completed_before_0630` | `< 1` for 1 datapoint, `treat_missing_data = notBreaching` |
+| Close did not run at all | `commission_run_duration_seconds` (SampleCount) | `< 1` over 26h |
+| Duplicate disbursement | `commission_payout_total{state=requested}` vs `{state=replayed}` | `requested > 0` on a run where `computed = 0` — a **P1 and a release freeze**, per the SLO doc, not a burn-rate alert |
+
+The second one matters more than it looks: the gauge is only written when a close
+actually runs, so a close that never fires produces *no datapoint* rather than a zero.
+An alarm that only watches the gauge cannot distinguish "on time" from "never happened".
 
 ## Three things the alarm author needs that are not in the SLO doc
 
