@@ -90,6 +90,18 @@ export type CallbackKind = 'stk' | 'b2c';
  *                      `not_applied`.
  * - `not_applied`      Matched, but the guarded transition matched no row —
  *                      the charge was already terminal. Correct dedupe.
+ * - `contradicted`     The callback claimed success and Daraja's own records
+ *                      said otherwise (G5's confirming query). A hold, like
+ *                      `held`, but reported apart from it because nothing
+ *                      legitimate produces this: an amount mismatch is usually
+ *                      a bug somewhere, a contradiction is someone forging
+ *                      callbacks. This one should page.
+ * - `unconfirmed`      We could not reach Daraja, or Daraja does not know yet,
+ *                      so the PAID transition was withheld and the charge left
+ *                      to the reconciler. NOT an error — it is I5 applied to
+ *                      the callback path — but a rising rate means the
+ *                      confirming query is degrading and payments are being
+ *                      settled late.
  * - `malformed`        Unparseable body, answered 400. Excluded from the SLI;
  *                      counted so a broken sender is visible.
  */
@@ -99,6 +111,8 @@ export type CallbackOutcomeLabel =
   | 'duplicate'
   | 'unmatched'
   | 'held'
+  | 'contradicted'
+  | 'unconfirmed'
   | 'not_applied'
   | 'malformed';
 
@@ -172,6 +186,12 @@ export interface CallbackOutcomeShape {
   transition: 'PENDING->PAID' | 'PENDING->FAILED' | null;
   /** Set only where the service put the charge/payout on hold for a human (A1). */
   heldForReview?: boolean;
+  /**
+   * What the confirming stkQuery concluded, on the STK path. Absent on the B2C
+   * path: Daraja exposes no equivalent query for a disbursement, so a B2C
+   * result callback cannot be confirmed the same way (see metrics.md).
+   */
+  confirmation?: 'confirmed' | 'contradicted' | 'unconfirmed' | 'skipped' | 'not-required';
 }
 
 /**
@@ -189,6 +209,14 @@ export function callbackOutcomeLabel(o: CallbackOutcomeShape): CallbackOutcomeLa
   if (o.recorded === 'duplicate') return 'duplicate';
   if (!o.matched) return 'unmatched';
   if (o.applied) return o.transition === 'PENDING->PAID' ? 'applied_paid' : 'applied_declined';
+
+  // Checked before `heldForReview`, which a contradiction also sets: both are
+  // holds, and only one of them means someone is forging callbacks. Collapsing
+  // them would put a security event and a bookkeeping mismatch on the same
+  // alarm, at which point the alarm has to be tuned for the common one.
+  if (o.confirmation === 'contradicted') return 'contradicted';
+  if (o.confirmation === 'unconfirmed') return 'unconfirmed';
+
   if (o.heldForReview) return 'held';
   return 'not_applied';
 }

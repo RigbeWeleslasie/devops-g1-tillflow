@@ -24,7 +24,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { trace } from '@opentelemetry/api';
-import { metadataItem, STK_RESULT, type StkCallbackBody } from '@tillflow/mpesa';
+import { metadataItem, STK_RESULT, type MpesaAdapter, type StkCallbackBody } from '@tillflow/mpesa';
 import type { Db, Tx } from '../db.js';
 import { withTransaction } from '../db.js';
 import type { ChargeRow } from '../types.js';
@@ -53,6 +53,8 @@ export interface CallbackOutcome {
    * not be able to change which one a metric reports.
    */
   heldForReview: boolean;
+  /** What the confirming stkQuery said. See ConfirmationVerdict. */
+  confirmation: ConfirmationVerdict;
   /** Why nothing was applied, when nothing was. */
   reason: string | null;
 }
@@ -141,6 +143,144 @@ export async function findAdoptableCharge(
 export interface ApplyOptions {
   db: Db;
   now?: () => Date;
+  /**
+   * Daraja, for the confirming query. Omitted -> confirmation is skipped and
+   * a success callback is trusted on its own, which is the pre-G5 behaviour.
+   */
+  adapter?: MpesaAdapter;
+  /**
+   * Ask Daraja to confirm before any PENDING->PAID transition. Defaults on
+   * when an adapter is supplied. The switch exists so an operator can turn it
+   * off during a Daraja query-API outage (docs/runbook.md) rather than having
+   * every legitimate payment wait for the reconciler -- a deliberate,
+   * logged, temporary trade of integrity for availability, not a default.
+   */
+  confirmBeforePaid?: boolean;
+}
+
+/**
+ * What Daraja said when we asked whether this payment really succeeded.
+ *
+ * - `confirmed`     Daraja agrees: result code 0. Safe to pay.
+ * - `contradicted`  Daraja has a TERMINAL answer and it is not success. The
+ *                   callback claims money moved and the provider says it did
+ *                   not. Nothing legitimate produces this, so the charge is
+ *                   held for a human rather than resolved either way.
+ * - `unconfirmed`   Daraja does not know yet, or we could not reach it. Not
+ *                   evidence of anything. The charge stays PENDING and the
+ *                   reconciler owns it -- the same place a timed-out push
+ *                   already ends up (I5).
+ * - `skipped`       No adapter, or confirmation switched off.
+ * - `not-required`  Not a success callback; there is no PAID transition to
+ *                   guard.
+ */
+export type ConfirmationVerdict =
+  | 'confirmed'
+  | 'contradicted'
+  | 'unconfirmed'
+  | 'skipped'
+  | 'not-required';
+
+export interface Confirmation {
+  verdict: ConfirmationVerdict;
+  detail: string | null;
+}
+
+/**
+ * Close the forged-callback hole (docs/threat-model.md, residual risk owned by
+ * Payments and expiring at G5).
+ *
+ * Until now a callback was accepted on two checks: the CheckoutRequestID
+ * matches a charge we issued, and the amount matches ours. Both are values an
+ * attacker can learn or guess, and the callback endpoint is unauthenticated by
+ * necessity -- Safaricom cannot send our service token. So a forged POST with a
+ * live reference and the right amount moved a sale to PAID and wrote a
+ * `sale.paid` event, with no money behind it.
+ *
+ * The fix is to stop treating the callback as evidence. It is a NOTIFICATION;
+ * the provider's own records are the evidence. Before any PAID transition we
+ * ask Daraja directly, over a channel an attacker does not control, and the
+ * callback only tells us when to ask.
+ *
+ * ## Why this runs outside the transaction
+ *
+ * The discipline everywhere else in this service: never hold a transaction
+ * across a network call. It also has to run BEFORE the transaction rather than
+ * splitting it in two -- the callback_events insert both dedupes and records,
+ * so a crash between "recorded" and "applied" would leave a redelivery deduped
+ * against a callback that was never applied, and the payment would be lost.
+ * One transaction, decided with the answer already in hand.
+ *
+ * ## Why it does not query for every callback
+ *
+ * The endpoint is open to the internet, so anything it does on an attacker's
+ * behalf is an amplifier. The cheap pre-check below means a forged reference we
+ * never issued costs one indexed SELECT and no Daraja call at all. It also
+ * covers the adoption path -- a charge whose push timed out has no
+ * CheckoutRequestID of its own, and that is the weakest matching rule we have,
+ * so it is the last one that should go unconfirmed.
+ */
+async function confirmSuccess(
+  body: StkCallbackBody,
+  opts: ApplyOptions,
+  at: Date,
+): Promise<Confirmation> {
+  const cb = body.Body.stkCallback;
+  if (cb.ResultCode !== STK_RESULT.SUCCESS) return { verdict: 'not-required', detail: null };
+
+  const enabled = opts.confirmBeforePaid ?? opts.adapter !== undefined;
+  if (!opts.adapter || !enabled) {
+    return { verdict: 'skipped', detail: 'confirmation disabled' };
+  }
+
+  // Is there anything this callback could plausibly move? Either a charge
+  // already holding this reference, or one whose push timed out and that
+  // adoption would reach. If neither, the callback is unmatched and will be
+  // recorded as such -- no reason to spend a Daraja call on it.
+  const reportedKes = Number(metadataItem(body, 'Amount'));
+  const reportedMinor = Number.isFinite(reportedKes) ? Math.round(reportedKes * 100) : -1;
+  const phone = String(metadataItem(body, 'PhoneNumber') ?? '');
+  const since = new Date(at.getTime() - ADOPTION_WINDOW_MS).toISOString();
+
+  const candidate = await opts.db.query<{ n: number }>(
+    `SELECT 1 AS n FROM charges
+     WHERE status = 'PENDING'
+       AND hold_reason IS NULL
+       AND (checkout_request_id = $1
+            OR (checkout_request_id IS NULL AND amount_minor = $2 AND customer_msisdn = $3 AND created_at >= $4))
+     LIMIT 1`,
+    [cb.CheckoutRequestID, reportedMinor, phone, since],
+  );
+  if (candidate.rowCount === 0) {
+    return { verdict: 'not-required', detail: 'no PENDING charge this callback could move' };
+  }
+
+  try {
+    const result = await opts.adapter.stkQuery(cb.CheckoutRequestID);
+    if (result.status === 'pending') {
+      return {
+        verdict: 'unconfirmed',
+        detail: 'Daraja reports the transaction is still processing',
+      };
+    }
+    if (result.resultCode === STK_RESULT.SUCCESS) {
+      return { verdict: 'confirmed', detail: null };
+    }
+    return {
+      verdict: 'contradicted',
+      detail:
+        `callback claims success but stkQuery reports ResultCode ${result.resultCode} ` +
+        `(${result.resultDesc || 'no description'})`,
+    };
+  } catch (err) {
+    // Unreachable is not an answer. Treat it exactly like a timed-out push:
+    // stay PENDING, let the reconciler find out. Never pay on a failed check,
+    // and never fail on one either (I5).
+    return {
+      verdict: 'unconfirmed',
+      detail: `stkQuery failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions): Promise<CallbackOutcome> {
@@ -151,6 +291,10 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
   const checksum = callbackChecksum(body);
   const span = trace.getActiveSpan();
   span?.setAttributes({ 'mpesa.checkout_request_id': reference, 'mpesa.result_code': resultCode });
+
+  // Ask Daraja first, outside any transaction, and carry the answer in.
+  const confirmation = await confirmSuccess(body, opts, now());
+  span?.setAttributes({ 'payments.callback.confirmation': confirmation.verdict });
 
   return withTransaction(opts.db, async (tx) => {
     // 1. Record. Dedupe happens here, before anything else.
@@ -173,6 +317,7 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
       duplicateCount,
       adopted: false,
       heldForReview: false,
+      confirmation: confirmation.verdict,
       chargeId: null as string | null,
       transition: null as CallbackOutcome['transition'],
     };
@@ -255,6 +400,35 @@ export async function applyStkCallback(body: StkCallbackBody, opts: ApplyOptions
         );
         span?.setAttributes({ 'payments.charge.hold': true });
         return finish(false, { reason, heldForReview: true });
+      }
+
+      // 3b. The provider's own records, not the callback's word for it.
+      //     This is the G5 close on the forged-callback risk: everything above
+      //     checks values an attacker can guess, and this is the one check
+      //     that needs a channel they do not control.
+      if (confirmation.verdict === 'contradicted') {
+        // The callback says paid, Daraja says otherwise. Nothing legitimate
+        // produces this, so it is the strongest forgery signal we have —
+        // recorded in callback_events, logged, and metered as `contradicted`,
+        // which is the label that should page.
+        //
+        // But deliberately NOT a hold, and not a FAILED transition. A hold
+        // freezes the charge until a human clears it, which would hand anyone
+        // who can guess a live CheckoutRequestID and its amount a
+        // denial-of-service lever over that sale — punishing the customer for
+        // the attacker's message. Refusing is enough: the forgery changes no
+        // state at all, and the real callback (or the reconciler) still
+        // resolves the charge correctly afterwards. A forged callback should
+        // be a no-op, not an incident for the person trying to pay.
+        span?.setAttributes({ 'payments.callback.contradicted': true });
+        return finish(false, { reason: confirmation.detail });
+      }
+      if (confirmation.verdict === 'unconfirmed') {
+        // Not evidence of anything -- Daraja is slow or unreachable. The
+        // charge stays PENDING and the reconciler resolves it, exactly as a
+        // timed-out push already does (I5). Not a hold: nothing here needs a
+        // human, and holding would stop the reconciler from finishing the job.
+        return finish(false, { reason: confirmation.detail });
       }
 
       // 4 + 5. Guarded transition and the one ledger effect.

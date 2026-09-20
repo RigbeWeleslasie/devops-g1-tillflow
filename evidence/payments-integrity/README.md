@@ -38,13 +38,13 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments           # 105 tests
-npm test --workspace=@tillflow/commission         #  54 tests
+npm test --workspace=@tillflow/payments           # 116 tests
+npm test --workspace=@tillflow/commission         #  62 tests
 npm test --workspace=@tillflow/mpesa              #  32 tests
 npm test --workspace=@tillflow/integration-tests  #   9 tests
 ```
 
-Or the whole repo — `npm ci && npm test` — 248 tests across seven workspaces.
+Or the whole repo — `npm ci && npm test` — 288 tests across seven workspaces.
 
 ## G3 — the SLI metrics
 
@@ -53,10 +53,52 @@ Or the whole repo — `npm ci && npm test` — 248 tests across seven workspaces
 labels the SLO excludes and why, and three details of `infra/ecs.tf`'s `awsemf`
 exporter that an alarm has to be written around.
 
-They are recorded today and tested in CI, but **nothing is exported yet** —
-`services/_shared/ts/src/otel.ts` still configures a `traceExporter` only, so the
-OTel API hands back a no-op meter. They start flowing the day the shared metric
-reader lands, with no change to either service.
+The shared metric reader landed in #19, so these now export for real — written
+against `@opentelemetry/api` throughout, so nothing in either service changed
+when it did.
+
+## G5 — a success callback is a notification, not evidence
+
+`docs/threat-model.md` carried this as an accepted residual risk owned by Payments
+and expiring at this gate. The callback endpoint is unauthenticated by necessity —
+Safaricom cannot send our service token — and a callback used to be accepted on two
+checks: a matching `CheckoutRequestID` and a matching amount. **Both are values an
+attacker can learn or guess**, and getting both right moved a sale to `PAID` and
+emitted `sale.paid` with no money behind it.
+
+```bash
+node --import tsx --test services/payments/test/callbackConfirmation.test.ts   # 8 tests
+```
+
+Before any `PENDING->PAID` transition, Payments now asks Daraja directly over a
+channel the caller does not control. The callback only says *when* to ask.
+
+| Daraja's answer | What happens | Why |
+| --------------- | ------------ | --- |
+| success | charge goes `PAID` | the provider's own records agree |
+| a terminal non-success | nothing at all, metered `contradicted` | the forgery is a no-op |
+| still processing / unreachable | transition withheld, charge stays `PENDING` | a check we could not run is not a decline (I5) |
+
+Two decisions worth defending:
+
+- **A contradiction is not a hold.** Freezing the charge would hand anyone who can
+  guess a reference a denial-of-service lever over that sale — punishing the
+  customer for the attacker's message. Refusing is enough: the forged callback
+  changes no state, and the real callback settles the charge normally afterwards.
+  There is a test that asserts exactly that.
+- **No query runs unless a `PENDING` charge could actually be moved.** The endpoint
+  is open to the internet, so anything it does on a caller's behalf is an amplifier.
+  25 forged callbacks for references we never issued produce **zero** outbound
+  Daraja calls — one indexed `SELECT` each.
+
+`CONFIRM_CALLBACKS=false` turns it off for a Daraja query-API outage. That is an
+operator lever, not a default, and there is a test showing what it costs.
+
+**Still open:** Daraja exposes no equivalent query for a B2C disbursement in our
+adapter, so the payout side still rests on its reference being a payout UUID we
+generate (not guessable the way a `CheckoutRequestID` is) plus the amount
+cross-check. The edge IP allow-list is Meron's, if the sandbox publishes Safaricom's
+ranges.
 
 ## Both G2 flows, across the real seams
 
@@ -210,7 +252,7 @@ and an amount cross-check, with **no** IP allow-list and **no** confirming
 `stkQuery` before a PAID transition. A forger who guessed a live
 `CheckoutRequestID` *and* its exact amount would be accepted. Recorded as a
 residual risk in [`threat-model.md`](../../docs/threat-model.md) §5; the fix is
-an edge allow-list plus a confirming query, scheduled for G5.
+an edge allow-list plus a confirming query. The confirming query landed at G5 (`services/payments/test/callbackConfirmation.test.ts`); the edge allow-list and the B2C half are still open — see `docs/threat-model.md`.
 
 ## Boundary enforcement — commission never calls Daraja
 

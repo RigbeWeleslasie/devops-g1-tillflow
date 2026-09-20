@@ -11,6 +11,7 @@
  * caller is the internet.
  */
 import type { FastifyPluginAsync } from 'fastify';
+import type { MpesaAdapter } from '@tillflow/mpesa';
 import type { Db } from '../db.js';
 import { callbackOutcomeLabel, recordCallback, startTimer } from '../metrics.js';
 import { applyStkCallback, MalformedCallbackError, validateStkCallback } from '../services/callbackService.js';
@@ -19,6 +20,10 @@ import { applyB2CCallback, validateB2CCallback } from '../services/b2cCallbackSe
 export interface CallbacksRoutesOptions {
   db: Db;
   now?: () => Date;
+  /** Daraja, for the confirming query before any PAID transition (G5). */
+  adapter?: MpesaAdapter;
+  /** Operator switch for that query. See ApplyOptions.confirmBeforePaid. */
+  confirmBeforePaid?: boolean;
 }
 
 const DARAJA_ACK = { ResultCode: 0, ResultDesc: 'Accepted' };
@@ -44,6 +49,8 @@ const callbacksRoutes: FastifyPluginAsync<CallbacksRoutesOptions> = async (app, 
     const outcome = await applyStkCallback(body, {
       db: opts.db,
       ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.adapter ? { adapter: opts.adapter } : {}),
+      ...(opts.confirmBeforePaid !== undefined ? { confirmBeforePaid: opts.confirmBeforePaid } : {}),
     });
     const label = callbackOutcomeLabel(outcome);
     recordCallback('stk', label, elapsed());
@@ -58,6 +65,7 @@ const callbacksRoutes: FastifyPluginAsync<CallbacksRoutesOptions> = async (app, 
         matched: outcome.matched,
         applied: outcome.applied,
         transition: outcome.transition,
+        confirmation: outcome.confirmation,
         // The exact label the metric carries, so a panel showing a spike can
         // be joined to the log lines behind it by grepping one field.
         metricOutcome: label,
