@@ -26,17 +26,18 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 | - | --------- | ----- | ---------- | ------ |
 | 2.1 | Uncertain payment (Daraja timeout) | **Nebyat** | `payments` deployed | not started |
 | 2.2 | Callback replay / reorder | **Nebyat** | `payments` deployed | not started |
-| 2.3 / 2.8 | Platform failure — worker down / DLQ backlog | **Rigbe** | `pos-worker` deployed (✅ 2026-09-19) | ready to run — next |
+| 2.3 / 2.8 | Platform failure — worker down / DLQ backlog | **Rigbe** | `pos-worker` deployed (✅ 2026-09-19) | ✅ **done 2026-09-20** — real backlog, real alarm, timed 7m30s detect / 5m54s recover (`evidence/reliability-ops/g4-worker-down-drill.md`) |
 | 2.4 | Broken release — rollback | **Meron** | any service deployed | not started |
 | 2.5 | Restore from backup | **Meron** | none (RDS is already up) | not started |
 | 2.6 | External probe (canary) failing | **Meron** | canary live (✅ confirmed) | not started |
 | 2.7 | Elevated error rate/latency | — | n/a | not a dedicated drill — covered by 2.3 and 2.4 (`runbook.md`'s own note) |
 | 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), full flow for soak | partially ready — see §4 |
-| 2.10 | Error budget burn / game-day | **Rigbe** | 2.3/2.8 landing cleanly | the headline deliverable — see §5 |
+| 2.10 | Error budget burn / game-day | **Rigbe** | 2.3/2.8 landing cleanly | ✅ **done 2026-09-20** — same drill as 2.3/2.8 produced it, per §5's own plan (`evidence/reliability-ops/g4-worker-down-drill.md`) |
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
 table above: a Grafana dashboard export, a k6 analysis with the highest sustained RPS,
-and one timed game-day drill with a firing + recovery Slack alert.
+and one timed game-day drill with a firing + recovery Slack alert. The game-day drill is
+✅ done (see above). Grafana export and k6-against-real-target are still open.
 
 ## 3. Current real state (as of 2026-09-19, updated mid-session — re-check before trusting this)
 

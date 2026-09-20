@@ -2,8 +2,10 @@
 
 - **DRI:** Rigbe (Reliability + operations)
 - **Status:** All alarm-triggerable procedures written for G3 (2.1–2.10) and indexed so
-  every alarm's `runbook link` resolves to a real section. None are **rehearsed + timed**
-  yet — that's G4.
+  every alarm's `runbook link` resolves to a real section. **2.3/2.8/2.10 rehearsed and
+  timed for real** (2026-09-20, `evidence/reliability-ops/g4-worker-down-drill.md`) —
+  real backlog, real alarm, real Slack firing/recovery, 7m30s detect / 5m54s recover. The
+  rest (2.1/2.2/2.4/2.5/2.6/2.9) are G4 work still open — see `docs/g4-plan.md`.
 
 ## 0. On-call basics
 

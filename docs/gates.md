@@ -145,6 +145,27 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
 Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsal.
 **Blocked if:** recovery asserted but not executed and timed.
 
+### Rigbe's G4 status (full plan: `docs/g4-plan.md`)
+- [x] `docs/g4-plan.md` written — ownership split (payments → Nebyat, platform → Meron,
+      reliability → Rigbe), sequencing, real current-state snapshot
+- [x] Real bug found + fixed while starting the drill: `pos-worker` was silently running
+      the `busybox` placeholder (never cut over to a correct Terraform-registered
+      revision); a stale local `infra/terraform.tfvars` nearly caused `terraform apply`
+      to revert `pos`'s real deployment too. Neither applied blind — `terraform plan`
+      reviewed first. Full writeup `docs/scar-log.md`.
+- [x] **2.3/2.8 (worker down / DLQ backlog) — executed for real, timed.** Real sale
+      created via POS's live API, real `sale.paid` message injected onto
+      `devops-g1-sale-events`, worker genuinely killed and restarted. Organic alarm
+      FIRING (not `aws cloudwatch set-alarm-state`) at 7m30s, RECOVERED at 5m54s after
+      fix. `evidence/reliability-ops/g4-worker-down-drill.md`.
+- [x] **2.10 (game-day) — done as the natural byproduct of 2.3/2.8**, per the plan's own
+      design: one real firing + one real recovery Slack message, both checked against the
+      9-field contract. Same evidence file.
+- [ ] **Not started:** 2.9 (resource saturation / k6 soak) — needs `payments` deployed too
+      for a full sale→pay flow, not just `pos`
+- [ ] **Not started, not Rigbe's to execute:** 2.1/2.2 (Nebyat), 2.4/2.5/2.6 (Meron) — see
+      `docs/g4-plan.md` §2 for the ownership split and why
+
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
 destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend owned work.
