@@ -5,7 +5,9 @@
 listener rule), show the canary alarm fire, fix it, show recovery in the same Grafana
 uptime panel."*
 
-**Status:** NOT YET EXECUTED — commands below, fill the timeline in as you run it.
+**Status:** EXECUTED 2026-09-20 against the real deployed stack. Detection **2m 07s**,
+recovery **4m 27s**, zero Terraform drift. Both Slack messages were real alarm
+evaluations, not `set-alarm-state`.
 Per `docs/g4-plan.md` §6, a drill only counts once it has a real execution timestamp.
 
 ## Why an ALB listener rule
@@ -150,20 +152,74 @@ cd infra && AWS_PROFILE=devops-lab-new terraform plan -no-color | grep -E '^Plan
 **"No changes" is part of the evidence.** A drill that leaves drift behind has not
 finished.
 
-## Timeline — fill in
+## Timeline — executed 2026-09-20 (all UTC)
 
-| Marker | UTC | Evidence |
+| Marker | Time | Evidence |
 | --- | --- | --- |
-| T0 break | | `modify-rule` output |
-| First failing datapoint | | `SuccessPercent` = 0.0 |
-| T1 alarm ALARM | | `StateReason` showing a real threshold crossing |
-| Slack FIRING | | screenshot + `ALARM -> 200` log line |
-| T2 fix applied | | `modify-rule` output, `curl` 200 |
-| Alarm OK | | `StateValue` |
-| Slack RECOVERED | | screenshot + `OK -> 200` log line |
-| **Detection time** | T0 → T1 | |
-| **Recovery time** | T2 → alarm OK | |
-| Terraform drift | | `No changes` |
+| Baseline captured | 17:03:06 | alarm `OK`; `SuccessPercent` 100.0 × 5 consecutive minutes; `/api/pos/ready` 200 |
+| **T0 — rule broken** | **17:05:04** | `modify-rule` returned `/g4-drill-broken-path/*` |
+| Break confirmed from outside | 17:06:48 | `/api/pos/ready` and `/pos/ready` both **503** |
+| First failing datapoint | 17:05:00 | `SuccessPercent` 0.0 |
+| **T1 — alarm ALARM** | **17:07:11** | real threshold crossing (below) |
+| Slack FIRING delivered | ~17:07 | `slack devops-g1-uptime-probe-failing ALARM -> 200` |
+| **T2 — rule restored** | **17:19:23** | `modify-rule` returned `/api/pos/* /pos/*` |
+| Edge serving again | 17:19:45 | both paths **200**, 22s after the fix |
+| **Alarm OK** | **17:23:50** | real threshold crossing (below) |
+| Slack RECOVERED delivered | ~17:23 | `slack devops-g1-uptime-probe-failing OK -> 200` |
+| Terraform drift from the drill | 17:26 | **none** — see below |
+
+**Detection time: 2m 07s** (T0 17:05:04 → T1 17:07:11)
+**Recovery time: 4m 27s** (T2 17:19:23 → alarm OK 17:23:50)
+**Total outage: 14m 19s** (T0 → T2) — the fix was held deliberately to capture evidence,
+not because recovery was slow; the edge was serving again 22 seconds after the revert.
+
+### Both transitions were real evaluations
+
+Not `aws cloudwatch set-alarm-state`. CloudWatch's own reasons:
+
+```
+ALARM: Threshold Crossed: 3 out of the last 5 datapoints
+       [0.0 (17:07:00), 0.0 (17:06:00), 0.0 (17:05:00)]
+       were less than the threshold (100.0)
+
+OK:    Threshold Crossed: 3 out of the last 5 datapoints
+       [100.0 (17:22:00), 100.0 (17:21:00), 100.0 (17:20:00)]
+       were not less than the threshold (100.0)
+```
+
+### The metric series
+
+```
+17:01–17:04   100.0  100.0  100.0  100.0      <- healthy
+17:05–17:19     0.0 ... 0.0  (15 minutes)     <- broken
+17:20–17:25   100.0  100.0  100.0  100.0      <- recovered
+```
+
+### The finding that matters
+
+**During the entire 14-minute outage, every in-VPC signal said the service was fine:**
+
+| Signal | During outage |
+| --- | --- |
+| ECS `desiredCount` / `runningCount` | **2 / 2** |
+| ALB target group health | **`healthy healthy`** |
+| External probe | **0.0** |
+
+The tasks were genuinely healthy — they answer `/ready` unprefixed on their own port, and
+the ALB health check never traverses the listener rule that was broken. So container
+health, task health and target health were all green while no user could reach the
+service.
+
+This is the "no external probe" blocker demonstrating its own reason for existing: the
+only signal that caught this was the one running outside the VPC and asserting the
+user's actual path.
+
+### No drift left behind
+
+`terraform plan` after the drill shows only the three pre-existing POS task-definition
+replacements (the busybox-placeholder vs real-digest flip tracked separately). The ALB
+listener rule does **not** appear in the plan — the revert restored it to exactly the
+value Terraform expects.
 
 ## Prior unforced occurrence — 2026-09-19
 

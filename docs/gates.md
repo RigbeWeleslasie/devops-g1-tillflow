@@ -171,12 +171,14 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       rollback-if-wrong steps: `evidence/platform-delivery/g4-canary-edge-drill.md` (2.6),
       `g4-rollback-drill.md` (2.4), `g4-restore-drill.md` (2.5). **Procedures only — per
       `docs/g4-plan.md` §6 these do not count until executed and timed.**
-- [ ] **2.6 (external probe / edge) — ready to run, no dependency.** Breaks the ALB
-      priority-10 listener rule, times detection and recovery, one-command revert. The same
-      failure already occurred *unforced* on 2026-09-19 (deploy rev 33 broke path routing;
-      `SuccessPercent` 100.0 -> 0.0 at 09:03 UTC, alarm fired, Slack notified, while ECS and
-      the ALB both reported healthy) — recorded in the drill doc, since an unforced
-      detection is stronger evidence than a staged one.
+- [x] **2.6 (external probe / edge) — EXECUTED AND TIMED, 2026-09-20.** ALB priority-10
+      listener rule broken deliberately at 17:05:04Z; alarm fired on a **real** threshold
+      crossing at 17:07:11Z (**detection 2m 07s**); rule restored 17:19:23Z; alarm back to
+      OK 17:23:50Z (**recovery 4m 27s**). Both Slack messages were real evaluations, not
+      `set-alarm-state` — CloudWatch's own `StateReason` quoted in the evidence. Throughout
+      the outage ECS reported **2/2 running** and the ALB target group **`healthy healthy`**
+      while the external probe read **0.0**: the blocker justifying itself. `terraform plan`
+      after the drill shows no drift from it. `evidence/platform-delivery/g4-canary-edge-drill.md`.
 - [ ] **2.4 (broken release / rollback) — blocked on the `prod` GitHub environment.**
       `deploy.yml`'s `release` job carries `environment: prod`, which has no required
       reviewer, so the job has never run and every deploy so far has been a manual
