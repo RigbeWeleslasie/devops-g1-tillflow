@@ -3,7 +3,9 @@
 **DRI:** Meron — Platform + delivery. Covers `docs/runbook.md` §2.5, whose stated G4 proof
 is: *"restore into a safe target, verify RPO/RTO, reconcile, then declare."*
 
-**Status:** NOT YET EXECUTED.
+**Status:** EXECUTED 2026-09-21. **RTO 19m 52s** against a 30-minute target, production
+untouched. Data verification was blocked mid-drill by a separate bug — recorded below
+rather than glossed, because a restore nobody queried is not a proven restore.
 
 ## Confirmed capability
 
@@ -104,18 +106,63 @@ configuration (subnets + `sg-05a562d7801fd93f0`), overriding `DATABASE_URL` to t
 restored endpoint. Note the restored instance has the **same master credentials** as the
 source, so reuse `devops-g1/db` and do not put a password in a command line.
 
-## Timeline — fill in
+## Timeline — executed 2026-09-21 (all UTC)
 
-| Marker | UTC | Evidence |
+| Marker | Time | Evidence |
 | --- | --- | --- |
-| T0 restore requested | | `restore-db-instance-to-point-in-time` output |
-| Restore point (PITR target) | | `LatestRestorableTime` at T0 |
-| Instance available | | `wait` returned |
-| Row counts verified | | query output vs source |
-| **Measured RPO** | | latest row timestamp vs restore point |
-| **Measured RTO** | T0 → verified | target ≤ 30 min (`runbook.md` §1) |
-| Provider reconciliation | | executed, or **not executed + why** |
-| Restored instance deleted | | `delete-db-instance` output |
+| Baseline captured | 07:00:49 | source `devops-g1`: `db.t4g.small`, Multi-AZ, 7-day retention, `LatestRestorableTime` 06:54:00 |
+| **T0 — restore requested** | **07:01:28** | `restore-db-instance-to-point-in-time` returned `status: creating` |
+| Restore point (PITR target) | 07:19:21 | `--use-latest-restorable-time` |
+| creating → configuring-enhanced-monitoring | 07:10:16 | status poll |
+| configuring → backing-up | 07:11:19 | status poll |
+| **Instance available** | **07:21:20** | status poll |
+| **Measured RTO** | **19m 52s** | T0 → available. Target ≤ 30 min (`runbook.md` §1) — **met** |
+| Row-count verification | — | **blocked, see below** |
+| Provider reconciliation | — | **not executed, see below** |
+| Restored instance deleted | | see Cleanup |
+
+Production `devops-g1` was untouched throughout: the restore created a separate instance,
+which is the whole point of the runbook's "safe target" wording.
+
+### What the 20 minutes were spent on
+
+Nearly all of it was `backing-up` (07:11 → 07:21). Worth knowing for planning: the RTO
+here is dominated by RDS taking its own first backup of the new instance, not by data
+volume — this database is 20 GB allocated with a few hundred rows. A larger database
+would not be proportionally slower to restore, but nor is 20 minutes a floor that can be
+tuned away by making the data smaller.
+
+## Two things that did not get verified, and why
+
+**Row counts / measured RPO — blocked by a second bug.** The plan was to run a one-off
+task on `devops-g1-migrate-pos`'s network configuration to query the restored endpoint
+from inside the VPC. That task definition had reverted to the **busybox placeholder**:
+
+```
+runc create failed: unable to start container process:
+error during container init: exec: "node": executable file not found in $PATH
+```
+
+This is the `infra/terraform.tfvars` stale-digest problem resurfacing — the committed
+tfvars pins an old image, so a `terraform apply` by anyone without the current digest
+rewrites the migrate task definition back to busybox. It has now done this at least
+twice (see `docs/scar-log.md`).
+
+So the RTO figure is real and measured; **the RPO figure is not, and is not claimed.**
+What was verified at the RDS level: the restored instance reports `available`, the same
+20 GB allocation as the source, and an `InstanceCreateTime` inside the PITR window.
+That establishes the restore mechanism works. It does not establish that the rows are
+what we expect, which is the part that matters in a real recovery.
+
+**Provider reconciliation (runbook §2.5 step 4) — not executed.** Reconciling `PENDING`
+charges against Daraja requires sandbox credentials in `devops-g1/daraja`, which are
+unset (`docs/gates.md` G2). This is the step that distinguishes a money system's restore
+from a generic one: restored data is a snapshot of what *we* believed at time T, while
+the provider kept settling payments after T. Declaring recovery without it risks
+double-paying or silently dropping a payment.
+
+Both gaps are named rather than skipped, per `docs/g4-plan.md` §6's rule that a drill
+counts only when it has actually been executed.
 
 ## Cleanup — do not skip
 
