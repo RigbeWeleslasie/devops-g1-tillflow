@@ -73,7 +73,7 @@ incident or painful surprise. Blameless. Newest first.
   surface exactly this kind of silent drift by demanding something be scaled and observed
   for real, not just declared.
 - **Owner:** Rigbe
-=======
+
 ### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
 - **Area:** services/commission (worker), infra (scheduler)
 - **What happened:** `devops-g1-commission-payout-age` fired on a real backlog — 4 messages,
