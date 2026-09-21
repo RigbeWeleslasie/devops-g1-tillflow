@@ -997,6 +997,17 @@ resource "aws_grafana_workspace" "main" {
 #      math over a missing series yields no data rather than zero. That is why
 #      every burn-rate alarm here sets `treat_missing_data = "notBreaching"`:
 #      "we have not seen an error yet" must not read as a breach.
+#
+# POS only, deliberately. The Payments equivalents are mechanical to write from
+# the mapping in evidence/payments-integrity/metrics.md, but
+# `payments_command_total` has never been emitted: a full-flow k6 run on
+# 2026-09-21 created real charges and every STK push timed out against unset
+# Daraja sandbox credentials, so only `payments_reconcile_total{unqueryable}`
+# exists. Writing alarms against an unverified dimension set is how an alarm
+# ends up sitting in INSUFFICIENT_DATA forever while looking correct in
+# Terraform -- the failure this whole block exists to avoid. Unblocked by
+# working credentials in devops-g1/daraja (Area 2).
+# See evidence/reliability-ops/k6-fullflow-run.md.
 # ---------------------------------------------------------------------------
 
 locals {
