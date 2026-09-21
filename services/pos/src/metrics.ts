@@ -10,8 +10,8 @@
  * `result` label values on this same instrument (`idempotent`,
  * `unique_violation`), the same way `@tillflow/payments`' `recordCommand`
  * folds its own idempotent-replay signal into `payments_command_total`'s
- * `result` label rather than a second counter. One instrument with three
- * result values is one alarm-friendly series to query, not three to keep in
+ * `result` label rather than a second counter. One instrument with four
+ * result values is one alarm-friendly series to query, not four to keep in
  * sync.
  *
  * Two deliberate choices carried over from payments/src/metrics.ts:
@@ -45,16 +45,25 @@
  *                       real in production, not just in a single-threaded
  *                       test — worth seeing on its own, not lost inside
  *                       `idempotent`'s count.
+ * - `error`             A valid request we failed to serve: a database error
+ *                       or a bug escaping createSale. The ONLY failure value,
+ *                       and the series the burn-rate alarms in
+ *                       infra/observability.tf count as `bad`. It was absent
+ *                       in the first version of this file, which meant a POS
+ *                       outage returning 500s recorded nothing and the alarms
+ *                       could never fire -- "no error series yet" reads as
+ *                       "no errors", which is the failure that matters most.
  *
  * A 4xx from bad input (unknown product/attendant, empty line items, a
  * genuine same-key-different-body conflict) records nothing: those are
  * excluded from both halves of the SLI by docs/slo-error-budgets.md's
  * exclusion rules, and counting them here would let a client's bad request
- * burn a budget that was never at risk.
+ * burn a budget that was never at risk. See createSale in
+ * services/pos/src/services/saleService.ts for where that line is drawn.
  */
 import { metrics, type Counter, type Meter } from '@opentelemetry/api';
 
-export type SaleWriteResult = 'ok' | 'idempotent' | 'unique_violation';
+export type SaleWriteResult = 'ok' | 'idempotent' | 'unique_violation' | 'error';
 
 let meter: Meter | undefined;
 let saleWriteTotal: Counter | undefined;
@@ -67,8 +76,9 @@ function getMeter(): Meter {
 export function recordSaleWrite(result: SaleWriteResult): void {
   saleWriteTotal ??= getMeter().createCounter('pos_sale_write_total', {
     description:
-      'POST /sales outcomes: a new write, an idempotent replay, or a replay ' +
-      'recovered from a concurrent unique-key race. docs/slo-error-budgets.md POS row.',
+      'POST /sales outcomes: a new write, an idempotent replay, a replay ' +
+      'recovered from a concurrent unique-key race, or an error. ' +
+      'docs/slo-error-budgets.md POS row.',
   });
   saleWriteTotal.add(1, { result });
 }

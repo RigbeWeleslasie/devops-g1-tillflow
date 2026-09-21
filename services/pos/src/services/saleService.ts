@@ -82,7 +82,43 @@ function rowToSale(row: {
   };
 }
 
+/**
+ * POST /sales, with the SLI's failure half. `writeSale` records the three good
+ * outcomes (`ok`, `idempotent`, `unique_violation`) where they happen; this
+ * wrapper records `error` for everything else that escapes it.
+ *
+ * "Everything else" deliberately excludes the client-error classes: an unknown
+ * product, an empty basket or a reused idempotency key is a 4xx, and
+ * docs/slo-error-budgets.md excludes those from BOTH halves of the SLI --
+ * counting them would let a caller's bad request burn budget that was never at
+ * risk. What remains is a valid request we failed to serve (a database error,
+ * a bug), which is exactly what the burn-rate alarms in infra/observability.tf
+ * are written to catch. Without this, a POS outage returning 500s recorded
+ * nothing at all: the alarms' `bad` series never existed and they could not fire.
+ *
+ * Wrapping (rather than a catch inside writeSale) is what covers the initial
+ * idempotency lookup too, which runs before writeSale's own try block.
+ */
 export async function createSale(
+  db: Db,
+  tenantId: string,
+  attendantId: string,
+  items: CreateSaleItemInput[],
+  idempotencyKey: string,
+): Promise<CreateSaleResult> {
+  try {
+    return await writeSale(db, tenantId, attendantId, items, idempotencyKey);
+  } catch (err) {
+    const isClientError =
+      err instanceof NotFoundError ||
+      err instanceof InvalidStateError ||
+      err instanceof IdempotencyConflictError;
+    if (!isClientError) recordSaleWrite('error');
+    throw err;
+  }
+}
+
+async function writeSale(
   db: Db,
   tenantId: string,
   attendantId: string,

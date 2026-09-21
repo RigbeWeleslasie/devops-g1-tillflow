@@ -118,8 +118,9 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
 - [x] Queue-age-is-stack-wide caveat added to `docs/slo-error-budgets.md` (flagged by
       Meron's G3 review)
 - [x] POS SLI counter — `pos_sale_write_total{result}` (`services/pos/src/metrics.ts`),
-      wired into `saleService.ts`'s three real outcomes (`ok`/`idempotent`/
-      `unique_violation`), asserted through the real `POST /sales` route + the real
+      wired into `saleService.ts`'s real outcomes (`ok`/`idempotent`/
+      `unique_violation`, and — added 2026-09-21 — `error`, without which the burn-rate alarms
+      had no failure series and could not fire; `docs/scar-log.md`), asserted through the real `POST /sales` route + the real
       OpenTelemetry SDK (`services/pos/test/metrics.test.ts`), matching
       `@tillflow/payments`' merged pattern (#20). `unique_violation` isn't exercised in
       pg-mem (no real cross-transaction isolation — same documented gap as

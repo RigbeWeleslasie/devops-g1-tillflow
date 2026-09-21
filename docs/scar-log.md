@@ -18,6 +18,40 @@ incident or painful surprise. Blameless. Newest first.
 
 ---
 
+### 2026-09-21 — POS's SLO could not see a failure: the burn-rate alarms counted a series POS never emitted
+- **Area:** services/pos (SLI), infra (burn-rate alarms)
+- **What happened:** Feedback on the Grafana export asked for a budget-remaining / burn-rate
+  panel. Building it meant reading the burn-rate alarms' math, whose `bad` series is
+  `pos_sale_write_total{result="error"}`. POS has never emitted that value. The counter I wrote
+  for G3 (`feat/g3-pos-sli-metrics`) defined only `ok | idempotent | unique_violation`, on the
+  reasoning that an unexpected failure would already be caught by the ALB 5xx alarm.
+- **Impact:** None realised — no outage fell in the window. Structurally, though, a POS failure
+  returning 500s recorded **nothing** to the SLI. The alarms evaluate `IF(total > 0, bad / total, 0)`
+  over a `bad` series that does not exist, with `treat_missing_data = "notBreaching"`, so they could
+  not fire; a budget panel would have read 100% remaining permanently. G3's "no per-service budget"
+  blocker was cleared in form and not in function for POS.
+- **Root cause:** Two individually reasonable decisions that never met. I left the error label out
+  (the SLO excludes 4xx, the ALB alarm covers 5xx). Meron then wrote the burn-rate alarms against the
+  documented SLO and said so in the alarm comment — *"there is no `result=error` value today … the
+  math is written so that adding one starts burning budget"* — so the gap was written down, but on
+  the alarm's side as a future addition and on the counter's side as a deliberate omission. Neither
+  file owned it. And it is the worst kind of gap to leave: "no error series yet" reads as "no errors",
+  so the failure that matters most looks exactly like health.
+- **Fix:** `createSale` (`services/pos/src/services/saleService.ts`) is now a thin wrapper that
+  records `result="error"` for anything that escapes the write path — including the initial
+  idempotency lookup, which runs outside the old try block — and deliberately not for
+  `NotFoundError`, `InvalidStateError` or `IdempotencyConflictError`, the 4xx classes the SLO excludes
+  from both halves. Three tests through the real `POST /sales` route and the real OpenTelemetry SDK
+  (`services/pos/test/metrics.test.ts`); both halves falsified — removing the recording fails the
+  error test, removing the exclusion fails the 404 and 409 tests.
+- **Prevention:** Not solved: nothing yet proves a burn-rate alarm can *fire* end to end. A series
+  existing in a test is not the same as an alarm moving in CloudWatch, and the alarms sat in a
+  plausible-looking `OK` the whole time. The check that would have caught this is a drill: inject a
+  real failure and watch the alarm change state — the same shape as the worker-down drill
+  (`evidence/reliability-ops/g4-worker-down-drill.md`), aimed at the SLO alarms instead. Two things
+  stay open: the fix only takes effect once `pos` is redeployed, and the "there is no `result=error`
+  value today" comment in `infra/observability.tf` is now stale (Meron's file — flagged, not edited).
+- **Owner:** Rigbe
 
 ### 2026-09-19 — pos-worker silently ran busybox for who knows how long; a stale local checkout nearly reverted the real pos deploy too
 - **Area:** infra (ECS task definitions, `lifecycle.ignore_changes`)
