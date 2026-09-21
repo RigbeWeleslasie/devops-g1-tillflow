@@ -37,6 +37,30 @@ and an actual ECS deploy first (Meron's G3 work, in progress).
 - `checks` > 99%
 - Infra (from Grafana, correlated): CPU < 70%, memory < 75%, bounded SQS queue age
 
+## Constraint: the deployed edge throttles at 50 rps
+
+The API Gateway stage in front of every deployed target allows **50 requests/second steady,
+burst 100** (`infra/variables.tf` `api_throttle_rate` / `api_throttle_burst`, confirmed on the
+live `$default` stage via `aws apigatewayv2 get-stage`). It is a blunt cost/DoS guard, and it
+matters here in three ways:
+
+- **A run through the edge cannot measure more than 50 rps.** Anything above it comes back
+  `429`, which k6 counts as `http_req_failed`. A "knee" found by `baseline.js` at that point is
+  the throttle, not a capacity limit of the service — reporting it as one would be wrong.
+- **It is shared with the uptime canary.** The probe goes through the same stage, so a load
+  test that saturates it fails `devops-g1-uptime-probe-failing`, pages Slack, and counts as
+  downtime in the uptime figure (2026-09-20 23:22–23:31 Nairobi: 10 minutes of `429`, see
+  `docs/scar-log.md`). Tell the alert channel before running.
+- **Where each scenario crosses it.** Measured on a `smoke.js`-shaped iteration (three
+  requests, `sleep(1)`): about 1.1 req/s per VU (`k6-fullflow-run.md`: 349 requests, ~5.6 req/s
+  at 5 VUs), so the limit is reached near 45 VUs. `soak.js` at its default 15 VUs (~17 rps)
+  stays under it. `baseline.js` ramps 20 VUs per step and `spike.js` peaks at 100, so both
+  cross it. These are estimates from one run, not measurements of each script.
+
+Two honest ways forward, and it is a decision, not a default: raise the throttle for the test
+window (Terraform, Platform's file, a production change to revert afterwards), or run as-is
+and report the result as *"edge-limited at 50 rps"* rather than as service capacity.
+
 ## Report (to `evidence/reliability-ops/` + `evidence/shared/`)
 Highest sustained RPS where SLOs hold · bottleneck · headroom · cost assumption ·
 caching before/after comparison · k6 JSON. **Not done yet** — needs a real run against a
