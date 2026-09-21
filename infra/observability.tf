@@ -1386,19 +1386,34 @@ resource "aws_cloudwatch_composite_alarm" "pos_slow_burn_ticket" {
 # this is cumulative consumption over the whole 28-day window, so it fires on
 # "we have spent too much" regardless of how fast we are spending right now.
 #
-# 28 days is 2,419,200s, far beyond CloudWatch's 1-day metric-math period cap,
-# so the window is approximated with a 1-day period and 28 evaluation periods:
-# the alarm fires when the error rate has averaged above the budget line for 28
-# consecutive days' worth of datapoints. That is the closest a metric alarm gets
-# to a rolling 28-day budget without a Lambda computing it; the exact figure
-# belongs on the Grafana budget panel, which reads the same series.
+# A metric alarm CANNOT span 28 days. CloudWatch enforces
+# `EvaluationPeriods * Period <= 604800` (7 days) for any alarm with a period of
+# an hour or more, and rejects anything longer at PutMetricAlarm time -- not at
+# plan time, which is why a first attempt at 1-day x 28 periods passed
+# `terraform plan` and failed `terraform apply`:
+#
+#   ValidationError: Metrics cannot be checked across more than a week
+#   (EvaluationPeriods * Period must be <= 604800) for alarms using period >= 3600
+#
+# So this is a 7-day window: the longest CloudWatch will evaluate, and exactly
+# a quarter of the SLO's 28-day budget period. Read it as an early warning --
+# "the last 7 days have been burning at a rate that spends the whole 28-day
+# budget" -- rather than as a literal budget-remaining calculation.
+#
+# The literal figure needs a rolling 28-day sum, which means either a Lambda
+# publishing a computed metric or a Grafana panel doing the math at query time.
+# The panel is the right home for it (docs/slo-error-budgets.md is Area 4's, and
+# `evidence/reliability-ops/grafana-dashboard-spec.md` already lists a
+# "budget remaining" panel); this alarm exists so the freeze trigger is not
+# purely a dashboard someone has to remember to look at.
 resource "aws_cloudwatch_metric_alarm" "pos_budget_low" {
   alarm_name          = "${local.prefix}-pos-budget-below-25pct"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   # 75% of a 0.1% budget consumed == a sustained error rate of 0.075%.
-  threshold           = 0.75 * (1 - 0.999)
-  evaluation_periods  = 28
-  datapoints_to_alarm = 28
+  threshold = 0.75 * (1 - 0.999)
+  # 7 x 1 day = 604800s exactly, the maximum CloudWatch allows.
+  evaluation_periods  = 7
+  datapoints_to_alarm = 7
   treat_missing_data  = "notBreaching"
 
   metric_query {
@@ -1448,9 +1463,9 @@ resource "aws_cloudwatch_metric_alarm" "pos_budget_low" {
   alarm_description = jsonencode({
     environment  = var.environment
     service      = "pos"
-    symptom      = "POS has consumed more than 75% of its 28-day error budget."
+    symptom      = "POS has been burning error budget at a 28-day-exhausting rate for 7 consecutive days."
     impact       = "Release freeze on pos: only reliability fixes and rollbacks merge until the budget recovers above 50%."
-    observed     = "Sale-write error rate sustained above ${format("%.3f", 0.75 * (1 - 0.999) * 100)}% across the 28-day window (target 99.9%)."
+    observed     = "Sale-write error rate sustained above ${format("%.3f", 0.75 * (1 - 0.999) * 100)}% for 7 consecutive days (target 99.9%). CloudWatch caps an alarm window at 7 days, so this is the early-warning proxy for the 28-day budget; the exact remaining figure is the Grafana budget panel."
     runbook      = "docs/runbook.md#210-error-budget-burn"
     owner        = local.service_owner["pos"]
     first_action = "Announce the freeze in the group channel, then stop shipping features to pos. docs/slo-error-budgets.md's budget policy says the freeze lifts when the rolling window recovers above 50%, not when someone judges it fixed."
