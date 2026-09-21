@@ -166,6 +166,31 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
 - [ ] **Not started, not Rigbe's to execute:** 2.1/2.2 (Nebyat), 2.4/2.5/2.6 (Meron) — see
       `docs/g4-plan.md` §2 for the ownership split and why
 
+### Meron's G4 status (2.4, 2.5, 2.6 — platform drills)
+- [x] Drill procedures written with exact commands, pre/post capture, fill-in timelines and
+      rollback-if-wrong steps: `evidence/platform-delivery/g4-canary-edge-drill.md` (2.6),
+      `g4-rollback-drill.md` (2.4), `g4-restore-drill.md` (2.5). **Procedures only — per
+      `docs/g4-plan.md` §6 these do not count until executed and timed.**
+- [x] **2.6 (external probe / edge) — EXECUTED AND TIMED, 2026-09-20.** ALB priority-10
+      listener rule broken deliberately at 17:05:04Z; alarm fired on a **real** threshold
+      crossing at 17:07:11Z (**detection 2m 07s**); rule restored 17:19:23Z; alarm back to
+      OK 17:23:50Z (**recovery 4m 27s**). Both Slack messages were real evaluations, not
+      `set-alarm-state` — CloudWatch's own `StateReason` quoted in the evidence. Throughout
+      the outage ECS reported **2/2 running** and the ALB target group **`healthy healthy`**
+      while the external probe read **0.0**: the blocker justifying itself. `terraform plan`
+      after the drill shows no drift from it. `evidence/platform-delivery/g4-canary-edge-drill.md`.
+- [ ] **2.4 (broken release / rollback) — blocked on the `prod` GitHub environment.**
+      `deploy.yml`'s `release` job carries `environment: prod`, which has no required
+      reviewer, so the job has never run and every deploy so far has been a manual
+      `aws ecs update-service`. Configuring that reviewer (a G0 open item, platform DRI)
+      unblocks this drill *and* G5's fresh-commit release. Fallback: `infra/scripts/deploy.sh`
+      proves the mechanism but not the pipeline — which the write-up must say plainly.
+- [ ] **2.5 (restore from backup) — ready to run, no dependency.** PITR confirmed available
+      (retention 7 days, latest restorable time within ~5 min). Restores to a NEW instance,
+      never over `devops-g1`. Provider reconciliation (runbook §2.5 step 4) cannot be
+      executed until `payments` is deployed and Daraja credentials exist — to be recorded as
+      designed-but-not-executed rather than quietly skipped.
+
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
 destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend owned work.
