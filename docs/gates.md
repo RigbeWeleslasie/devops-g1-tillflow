@@ -185,11 +185,14 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       `aws ecs update-service`. Configuring that reviewer (a G0 open item, platform DRI)
       unblocks this drill *and* G5's fresh-commit release. Fallback: `infra/scripts/deploy.sh`
       proves the mechanism but not the pipeline — which the write-up must say plainly.
-- [ ] **2.5 (restore from backup) — ready to run, no dependency.** PITR confirmed available
-      (retention 7 days, latest restorable time within ~5 min). Restores to a NEW instance,
-      never over `devops-g1`. Provider reconciliation (runbook §2.5 step 4) cannot be
-      executed until `payments` is deployed and Daraja credentials exist — to be recorded as
-      designed-but-not-executed rather than quietly skipped.
+- [x] **2.5 (restore from backup) — EXECUTED AND TIMED, 2026-09-21.** PITR restore to a new
+      instance `devops-g1-restore-202609210701` started 07:01:28Z, `available` 07:21:20Z:
+      **RTO 19m 52s** against the runbook's 30-minute target. Production `devops-g1` untouched.
+      **Two gaps named rather than skipped:** row-count verification was blocked because the
+      `devops-g1-migrate-pos` task definition had reverted to the busybox placeholder (the
+      stale-tfvars-digest bug, second occurrence), so **RPO is not claimed**; and provider
+      reconciliation (runbook §2.5 step 4) needs Daraja credentials that are unset.
+      `evidence/platform-delivery/g4-restore-drill.md`.
 
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
