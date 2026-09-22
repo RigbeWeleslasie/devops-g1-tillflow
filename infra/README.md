@@ -64,3 +64,25 @@ aws grafana update-permissions \
 Use `role=ADMIN` for the Reliability DRI (Rigbe builds the dashboards) and
 `role=VIEWER` for anyone who only needs to read them. Dashboards themselves are
 Area 4's deliverable, not Platform's — see `docs/ownership.md`.
+
+## Before a hand-run `terraform apply`
+
+```bash
+./infra/scripts/preflight.sh
+```
+
+Terraform **auto-loads** `infra/terraform.tfvars`. That file is gitignored and written by
+`deploy.sh`, so it records whatever digest *your machine* last deployed. If a teammate has
+deployed since, your copy is stale — and a bare `terraform apply` silently rewrites their
+task definitions back to your older image, or to the busybox placeholder for any service
+your copy records as `""`.
+
+That is not hypothetical: it reverted `devops-g1-migrate-pos` to busybox during G4 drill
+2.5, which is why that drill could not verify row counts (`docs/scar-log.md`).
+
+The preflight compares the file against what is actually running and fails if an apply
+would revert anything. It fails closed — if it cannot reach AWS it errors rather than
+reporting a pass it cannot justify.
+
+CI is unaffected: `deploy.yml` passes `-var 'service_images={}'` explicitly, which
+overrides the file. This is a human-at-a-terminal problem, and the preflight is the guard.

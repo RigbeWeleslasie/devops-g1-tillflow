@@ -21,28 +21,36 @@ Both bind to the real load balancer (`app/devops-g1-alb/2bb31700ab6c9137`) throu
 Terraform-provisioned CloudWatch data source, so the queries resolve against live data
 rather than being a scaffold.
 
-## What it does not yet contain
+## Scope — this is the capacity dashboard, not the SLO one
 
-Stated plainly so this is not read as closing more than it does. The review asked for
-*"5m/1h/28d uptime, SLO target, budget remaining, burn rate, RED, saturation, business
-signals"* (`grafana-dashboard-spec.md`). This export delivers the **capacity** panels —
-RPS and error volume. Still outstanding:
+This export covers **capacity**: RPS and target-5xx volume from `AWS/ApplicationELB`. It
+was committed while the SLO panels the G3 review asked for did not yet exist.
 
-- **No panel reads the `TillFlow` namespace.** The SLI counters
-  (`pos_sale_write_total`, and the payments/commission instruments) are emitting, and the
-  burn-rate alarms are live in AWS, but no *panel* shows budget remaining or burn rate.
-  That is the "budget panels" wording in the gate.
-- **No uptime panel** over 5m/1h/28d from `CloudWatchSynthetics/SuccessPercent`, which the
-  external probe has been publishing continuously.
-- One panel is still titled "New panel".
+**They now do.** `devops-g1-slo-dashboard` (#41,
+[`grafana-slo-dashboard.md`](grafana-slo-dashboard.md)) adds the 18 panels that close the
+review's P0 #1: uptime at 5m/1h/28d from `CloudWatchSynthetics/SuccessPercent`, error
+budget remaining over 28 days, fast/slow burn panels matching the alarm thresholds, and
+latency/CPU/queue-age saturation — all reading the `TillFlow` namespace.
 
-Dimensions an SLO panel would need, verified against live CloudWatch (these are not
-obvious and cost time to rediscover): the namespace is **`TillFlow`, flat** — not
-`TillFlow/<service>` — and services are distinguished by the **`OTelLib`** dimension
-(`@tillflow/pos`), *not* `service.name`. `dimension_rollup_option = "NoDimensionRollup"`
-means there is no pre-aggregated series, so a rate panel has to sum each `result` value
-explicitly. Same constraints the burn-rate alarms were written around; see the comment
-block at the bottom of `infra/observability.tf`.
+So the two dashboards are complementary, not overlapping: this one answers *"how much
+load did we take and did the ALB return errors"*, the SLO one answers *"how much budget is
+left and how fast are we spending it"*.
+
+Still cosmetic in **this** export: one panel is titled "New panel" rather than
+"Target 5xx". Worth fixing on the next re-export; it does not affect the query.
+
+### Dimension notes for anyone editing either dashboard
+
+Verified against live CloudWatch, and not obvious — they cost real time to rediscover:
+
+- The namespace is **`TillFlow`, flat** — not `TillFlow/<service>`.
+- Services are distinguished by the **`OTelLib`** dimension (`@tillflow/pos`), **not**
+  `service.name`.
+- `dimension_rollup_option = "NoDimensionRollup"` means there is no pre-aggregated
+  series, so a rate panel must sum each `result` value explicitly.
+
+Same constraints the burn-rate alarms were written around; see the comment block at the
+bottom of `infra/observability.tf`.
 
 ## Reproduce
 
