@@ -88,4 +88,4 @@ step "4. Trace"
 note "In X-Ray, filter on \`annotation.mpesa.checkout_request_id = \"$REF\"\` — three \`POST /callbacks/stk\` segments: the first with a Daraja stkQuery subsegment and a DB write, the second and third short with no state writes. Paste the trace id here:"
 note "trace_id: _____________________"
 
-finish_evidence "PASS — I3 held against the deployed stack: one transition, one ledger effect, at any order or repetition"
+finish_evidence "PASS — I3 held against the target above: one transition, one ledger effect, at any order or repetition"
