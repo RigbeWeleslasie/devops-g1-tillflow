@@ -38,13 +38,13 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments           # 116 tests
+npm test --workspace=@tillflow/payments           # 119 tests
 npm test --workspace=@tillflow/commission         #  62 tests
 npm test --workspace=@tillflow/mpesa              #  32 tests
 npm test --workspace=@tillflow/integration-tests  #   9 tests
 ```
 
-Or the whole repo — `npm ci && npm test` — 288 tests across seven workspaces.
+Or the whole repo — `npm ci && npm test` — 291 tests across seven workspaces.
 
 ## G3 — the SLI metrics
 
@@ -56,6 +56,19 @@ exporter that an alarm has to be written around.
 The shared metric reader landed in #19, so these now export for real — written
 against `@opentelemetry/api` throughout, so nothing in either service changed
 when it did.
+
+## G4 — drills 2.1 and 2.2, ready to execute
+
+**[`drills/`](drills/)** — one script per drill, producing the timed evidence
+`docs/g4-plan.md` §6 requires. Every assertion is over HTTP via
+`GET /admin/charges/:id/audit`, so no database access is needed to run them.
+
+They are validated against a local stack (real Payments HTTP surface, real
+`DarajaAdapter` path, stub-server for Daraja) and falsified — breaking callback dedupe
+makes 2.2 fail. **They have not yet been run against AWS.** The prerequisite is the
+M-Pesa stub deployed and `devops-g1/daraja.base_url` pointed at it; see
+[`drills/README.md`](drills/README.md) for why Safaricom credentials alone would not
+unblock them.
 
 ## G5 — a success callback is a notification, not evidence
 
