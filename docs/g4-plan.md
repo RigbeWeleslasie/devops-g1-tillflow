@@ -31,7 +31,7 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 | 2.5 | Restore from backup | **Meron** | none (RDS is already up) | not started |
 | 2.6 | External probe (canary) failing | **Meron** | canary live (✅ confirmed) | not started |
 | 2.7 | Elevated error rate/latency | — | n/a | not a dedicated drill — covered by 2.3 and 2.4 (`runbook.md`'s own note) |
-| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), full flow for soak | partially ready — see §4 |
+| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), `payments` deployed (✅) | **blocked on a decision, not on a target** — the edge throttles at 50 rps, so `baseline.js`/`spike.js` through it measure the throttle, not the service. `soak.js` at its default 15 VUs stays under it. See `k6/README.md` and `docs/scar-log.md` (2026-09-21) |
 | 2.10 | Error budget burn / game-day | **Rigbe** | 2.3/2.8 landing cleanly | ✅ **done 2026-09-20** — same drill as 2.3/2.8 produced it, per §5's own plan (`evidence/reliability-ops/g4-worker-down-drill.md`) |
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
