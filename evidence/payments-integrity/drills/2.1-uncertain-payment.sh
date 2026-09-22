@@ -89,4 +89,4 @@ step "4. Trace"
 note "In X-Ray, filter on \`annotation.payments.charge_id = \"$CHARGE_ID\"\` — one \`POST /charges\` segment with the outbound Daraja subsegment ending in a timeout, one short \`POST /charges\` segment for the retry with NO Daraja subsegment, one \`POST /admin/reconcile\` segment. Paste the trace id here:"
 note "trace_id: _____________________"
 
-finish_evidence "PASS — I2 and I5 held against the target above"
+finish_evidence "PASS — I2 and I5 held against the deployed stack"
