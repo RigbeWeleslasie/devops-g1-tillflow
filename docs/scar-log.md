@@ -108,6 +108,23 @@ incident or painful surprise. Blameless. Newest first.
   surface exactly this kind of silent drift by demanding something be scaled and observed
   for real, not just declared.
 - **Owner:** Rigbe
+- **Follow-up (Meron, 2026-09-22):** that automated check now exists —
+  `infra/scripts/preflight.sh`. It compares the auto-loaded `infra/terraform.tfvars`
+  against what each service is *actually running* and fails if a bare `terraform apply`
+  would revert anything. It **fails closed**: an expired token makes every
+  `describe-services` call return nothing, which the first version read as "no running
+  services" and reported as a PASS — a check that is satisfied by being blind is worse
+  than no check, so it now errors instead.
+
+  The same bug bit a second time during G4 drill 2.5 (2026-09-21): the migrate task
+  definition had reverted to busybox, so the restore drill could not query the restored
+  database and **RPO was left unmeasured** rather than claimed
+  (`evidence/platform-delivery/g4-restore-drill.md`). Twice is a pattern, not bad luck —
+  hence the guard rather than another reminder to read the plan.
+
+  Worth stating plainly for G5: this is a **human-at-a-terminal** problem only. CI passes
+  `-var 'service_images={}'` explicitly and is immune. The exposure is exactly the
+  destroy/rebuild G5 grades, where someone applies by hand under time pressure.
 =======
 ### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
 - **Area:** services/commission (worker), infra (scheduler)
