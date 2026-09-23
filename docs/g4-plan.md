@@ -133,10 +133,14 @@ against the deployed target, not just `soak.js`. Status:
   breach as expected under 100 VUs (`checks` 32%, `http_req_failed` 66%), but latency for
   requests that get through stays flat (p95 61ms) — a gate rejecting requests, not POS
   degrading under load. `evidence/reliability-ops/k6-baseline-run.md`.
-- **`spike.js` — not yet run.** Both `baseline.js` and `spike.js` cross the live 50 rps API
-  Gateway throttle (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own
-  limit would show up — baseline's default steps reach 100 VUs, spike hits 100 VUs by
-  design.
+- **`spike.js` — done 2026-09-23.** Same edge-limited signature: both loose spike
+  thresholds breach (`checks` 21%, `http_req_failed` 79%) but successful-request latency
+  stays flat (p95 103ms) and the run recovers cleanly once the burst ends.
+  `evidence/reliability-ops/k6-spike-run.md`.
+- **All three (soak, baseline, spike) now have real runs against the deployed target.**
+  `baseline.js` and `spike.js` cross the live 50 rps API Gateway throttle
+  (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own limit would show
+  up — read both as edge-limited, per the decision above, not as POS's real ceiling.
 - **Decision (2026-09-22): run them as-is against the live throttle and report the result
   as edge-limited, rather than asking Meron to raise the throttle for a test window.** No
   infra change, no coordination cost, no risk to the shared environment — the tradeoff is
