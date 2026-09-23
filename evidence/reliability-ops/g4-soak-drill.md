@@ -37,10 +37,24 @@ real JWT signed by the live `/dev/tokens` endpoint for this run, not a fixture).
 - **No leak or backlog growth under sustained load at ~40 rps for 15 minutes** — the whole
   point of a soak over a baseline. Latency stayed flat (p95 61ms vs p90 53ms, no drift
   visible in the aggregate), and every single request succeeded.
-- **Grafana correlation (ECS CPU/memory, POS latency p95, sale-events queue age panels on
-  `devops-g1-slo-dashboard`) is not yet attached to this writeup.** The run itself proves
-  the k6-side numbers; the saturation panels are what would show *why* headroom exists (or
-  doesn't) at the infrastructure level, and that screenshot is still outstanding.
+- **Grafana correlation — confirmed, screenshot attached.**
+  [`g4-soak-grafana-correlation.png`](g4-soak-grafana-correlation.png), `devops-g1-slo-dashboard`,
+  time range 2026-09-22 21:10–21:50 Nairobi/EAT (18:10–18:50 UTC), which brackets the
+  18:21–18:38 UTC run with margin on both sides:
+  - **POS target latency p95** — flat at 0 outside the run window, jumps to a ~50ms peak at
+    ramp-up, settles to a ~30–40ms plateau for the hold, drops back to 0 after ramp-down.
+    Same order of magnitude as the k6-side p95 (61ms) — Grafana's bucketed aggregation
+    doesn't match k6's raw percentile exactly, but both agree: fast and flat, no drift.
+  - **POS ECS CPU / memory** — CPU rises from near-idle to a ~20–25% plateau, memory from
+    ~10% to ~12%, both for the exact duration of the hold, both drop back down after. Real,
+    visible load — and nowhere near the 70%/75% alarm thresholds (`docs/runbook.md`), which
+    is consistent with the soak deliberately staying under the edge throttle rather than
+    pushing POS's own resource ceiling.
+  - **sale-events queue age** — flat at 0 for the entire window. No backlog, matching the
+    "no leak or queue growth" claim above with an actual chart, not just an inference from
+    k6's own numbers.
+  - **Fast/slow burn panels** (same screenshot) — flat at 0 against their 14.4×/6× red
+    threshold lines, consistent with zero failed writes during the run.
 - **This is not the capacity envelope.** A soak alone doesn't find "the highest sustained
   RPS" `docs/ownership.md` asks for — that's `baseline.js`'s job (a stepped ramp to find
   the knee). Soak and baseline are complementary, not substitutes; see

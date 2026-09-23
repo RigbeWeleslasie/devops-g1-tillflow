@@ -36,8 +36,13 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
 table above: a Grafana dashboard export, a k6 analysis with the highest sustained RPS,
-and one timed game-day drill with a firing + recovery Slack alert. The game-day drill is
-✅ done (see above). Grafana export and k6-against-real-target are still open.
+and one timed game-day drill with a firing + recovery Slack alert. **All three are now
+done:** game-day (see above); Grafana export
+(`evidence/reliability-ops/grafana-slo-dashboard-export.json`); k6 against the real
+deployed target, all three scenarios, with a Grafana screenshot correlating the soak run
+(§7, `evidence/reliability-ops/g4-soak-drill.md`). "Highest sustained RPS" landed as an
+edge-throttle number (~40 rps, `docs/g4-edge-throttle-caveat`), not a POS capacity ceiling
+— named as such throughout, per the 2026-09-22 decision.
 
 ## 3. Current real state (as of 2026-09-19, updated mid-session — re-check before trusting this)
 
@@ -129,9 +134,18 @@ The all-gates review (2026-09-22) named this directly: G3's "k6 envelope" needs
 against the deployed target, not just `soak.js`. Status:
 
 - **`soak.js` — done 2026-09-22**, §2's table and `evidence/reliability-ops/g4-soak-drill.md`.
-- **`baseline.js` and `spike.js` — not yet run.** Both cross the live 50 rps API Gateway
-  throttle (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own limit
-  would show up — baseline's default steps reach 100 VUs, spike hits 100 VUs by design.
+- **`baseline.js` — done 2026-09-23**, confirms the edge-limited reading directly: thresholds
+  breach as expected under 100 VUs (`checks` 32%, `http_req_failed` 66%), but latency for
+  requests that get through stays flat (p95 61ms) — a gate rejecting requests, not POS
+  degrading under load. `evidence/reliability-ops/k6-baseline-run.md`.
+- **`spike.js` — done 2026-09-23.** Same edge-limited signature: both loose spike
+  thresholds breach (`checks` 21%, `http_req_failed` 79%) but successful-request latency
+  stays flat (p95 103ms) and the run recovers cleanly once the burst ends.
+  `evidence/reliability-ops/k6-spike-run.md`.
+- **All three (soak, baseline, spike) now have real runs against the deployed target.**
+  `baseline.js` and `spike.js` cross the live 50 rps API Gateway throttle
+  (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own limit would show
+  up — read both as edge-limited, per the decision above, not as POS's real ceiling.
 - **Decision (2026-09-22): run them as-is against the live throttle and report the result
   as edge-limited, rather than asking Meron to raise the throttle for a test window.** No
   infra change, no coordination cost, no risk to the shared environment — the tradeoff is
