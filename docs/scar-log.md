@@ -19,6 +19,41 @@ incident or painful surprise. Blameless. Newest first.
 ---
 
 
+### 2026-09-21 — the edge throttles at 50 rps, so load tests measure the throttle and trip the canary
+- **Area:** infra (API Gateway stage), k6, the uptime SLI
+- **What happened:** Verifying the new SLO dashboard, 28-day uptime read 98.667%. The alarm
+  history and the canary Lambda's own logs split it into 64 failing minutes, all on `pos`:
+  39 minutes of `404` across four episodes (the prefix-routing bug, all before PR #28; one of
+  them is documented in `evidence/platform-delivery/g4-canary-edge-drill.md`), 15 minutes of
+  `503` (Meron's deliberate 2.6 drill — its recorded alarm times, 17:07–17:23 UTC, match the
+  20:08–20:23 Nairobi episode to the minute), and 10 minutes of `429` on 2026-09-20 23:22–23:31.
+  A `429` cannot come from the services, which do no rate limiting. The API Gateway stage does:
+  `ThrottlingRateLimit 50`, `ThrottlingBurstLimit 100`, confirmed on the live stage, matching
+  the Terraform defaults.
+- **Impact:** Three, none of which hurt a real user (the traffic was our own): (1) the throttle
+  is shared, so a load test that saturates it fails the external canary, pages Slack, and counts
+  as downtime; (2) any k6 run through the edge tops out at 50 rps and reports the excess as
+  failures, so a "knee" found there is the throttle, not the service — and the capacity
+  dashboard's RPS peak of about 3,000/min is exactly 50 × 60, which fits that reading without
+  proving it; (3) the uptime figure cannot tell a real outage from a planned drill or a load
+  test, because the SLO doc has no exclusion for either.
+- **Root cause:** A guard sized for a demo (`api_throttle_*`, described in Terraform as a "blunt
+  DoS/cost guard") that predates the load model, and three documents that never met: the
+  throttle lives in infra, the load shapes in `k6/`, and the canary that pays for a collision in
+  observability. Each owner could reasonably assume another had accounted for it. Which k6 run
+  produced the 429s is not confirmed.
+- **Fix:** None applied, deliberately — this is a decision. Recorded the constraint in
+  `k6/README.md` with estimates of where each scenario crosses it, and marked drill 2.9 as
+  blocked on the decision in `docs/g4-plan.md`. The options are to raise the throttle for the
+  test window (Terraform in Platform's files, a production change to revert afterwards) or to
+  run as-is and report "edge-limited at 50 rps", which is honest but is not service capacity.
+- **Prevention:** Announce load tests in the alert channel first — they will fire
+  `devops-g1-uptime-probe-failing`. Still open and needs a call: whether planned drills and
+  load tests are SLI exclusions, recorded in `docs/slo-error-budgets.md`. Until then the uptime
+  stat is read as "everything the canary saw", with the 15 drill minutes and 10 throttled
+  minutes annotated rather than hidden.
+- **Owner:** Rigbe (the throttle change itself is Meron's)
+
 ### 2026-09-19 — pos-worker silently ran busybox for who knows how long; a stale local checkout nearly reverted the real pos deploy too
 - **Area:** infra (ECS task definitions, `lifecycle.ignore_changes`)
 - **What happened:** Starting the G4 worker-down drill, `./infra/scripts/deploy.sh
@@ -73,6 +108,23 @@ incident or painful surprise. Blameless. Newest first.
   surface exactly this kind of silent drift by demanding something be scaled and observed
   for real, not just declared.
 - **Owner:** Rigbe
+- **Follow-up (Meron, 2026-09-22):** that automated check now exists —
+  `infra/scripts/preflight.sh`. It compares the auto-loaded `infra/terraform.tfvars`
+  against what each service is *actually running* and fails if a bare `terraform apply`
+  would revert anything. It **fails closed**: an expired token makes every
+  `describe-services` call return nothing, which the first version read as "no running
+  services" and reported as a PASS — a check that is satisfied by being blind is worse
+  than no check, so it now errors instead.
+
+  The same bug bit a second time during G4 drill 2.5 (2026-09-21): the migrate task
+  definition had reverted to busybox, so the restore drill could not query the restored
+  database and **RPO was left unmeasured** rather than claimed
+  (`evidence/platform-delivery/g4-restore-drill.md`). Twice is a pattern, not bad luck —
+  hence the guard rather than another reminder to read the plan.
+
+  Worth stating plainly for G5: this is a **human-at-a-terminal** problem only. CI passes
+  `-var 'service_images={}'` explicitly and is immune. The exposure is exactly the
+  destroy/rebuild G5 grades, where someone applies by hand under time pressure.
 =======
 ### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
 - **Area:** services/commission (worker), infra (scheduler)

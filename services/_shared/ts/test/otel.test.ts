@@ -14,7 +14,7 @@ import {
   AggregationTemporality,
 } from '@opentelemetry/sdk-metrics';
 import { metrics } from '@opentelemetry/api';
-import { sliCounter, sliHistogram } from '../src/otel.js';
+import { sliCounter, sliHistogram, startTelemetry, stopTelemetry } from '../src/otel.js';
 
 /**
  * Created at module scope, before any provider is registered -- this is the
@@ -101,4 +101,41 @@ test('histogram records a distribution, not a gauge', async () => {
 
   metrics.disable();
   await provider.shutdown();
+});
+
+/**
+ * Shutdown behaviour. These matter operationally rather than cosmetically: the
+ * previous handler called process.exit(0) the moment telemetry flushed, so a
+ * task being rolled during a deploy dropped whatever request it was serving,
+ * and a hung OTLP export held the task open until ECS SIGKILLed it.
+ */
+test('SIGTERM does not kill the process itself', async () => {
+  // If the handler still called process.exit, this test file would terminate
+  // here and report no result rather than passing.
+  const before = process.listenerCount('SIGTERM');
+  startTelemetry({ serviceName: 'shutdown-test', metricIntervalMillis: 600_000 });
+  assert.equal(
+    process.listenerCount('SIGTERM'),
+    before + 1,
+    'startTelemetry should register exactly one SIGTERM listener',
+  );
+
+  process.emit('SIGTERM');
+  // Give the handler a turn; reaching the next line at all is the assertion.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(true, 'process survived SIGTERM');
+
+  await stopTelemetry();
+});
+
+test('the signal handler is registered once, not once per call', async () => {
+  // process.on would stack a listener per startTelemetry call and eventually
+  // trip Node's MaxListenersExceededWarning; process.once does not.
+  const before = process.listenerCount('SIGINT');
+  startTelemetry({ serviceName: 'once-test', metricIntervalMillis: 600_000 });
+  const after = process.listenerCount('SIGINT');
+  assert.equal(after, before + 1);
+  await stopTelemetry();
+  process.removeAllListeners('SIGINT');
+  process.removeAllListeners('SIGTERM');
 });

@@ -81,6 +81,73 @@ const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (app, opts) =>
       return reply.send({ chargeId: request.params.id, released: true });
     },
   );
+
+  // The audit trail for one charge: every callback we received about it and
+  // every ledger effect it produced. This is what docs/runbook.md §2.2 asks an
+  // operator to check ("one legal transition, one ledger effect") and what the
+  // G4 drill asserts — over HTTP, so neither needs a route to RDS.
+  //
+  // I3 reads off this directly: `callbackEvents` should be ONE row per distinct
+  // callback with `duplicateCount` counting redeliveries, `applied` true
+  // exactly once; `outboxEvents` should be exactly one `sale.paid` for a PAID
+  // charge and none otherwise.
+  app.get<{ Params: { id: string } }>(
+    '/admin/charges/:id/audit',
+    { preHandler: app.requireServiceToken },
+    async (request, reply) => {
+      const charge = await opts.db.query<ChargeRow>('SELECT * FROM charges WHERE id = $1', [request.params.id]);
+      const c = charge.rows[0];
+      if (!c) return reply.code(404).send({ error: 'not_found' });
+
+      const callbacks = await opts.db.query<{
+        id: string;
+        kind: string;
+        result_code: number;
+        matched: boolean;
+        applied: boolean;
+        duplicate_count: number;
+        received_at: string | Date;
+      }>(
+        `SELECT id, kind, result_code, matched, applied, duplicate_count, received_at
+         FROM callback_events WHERE reference = $1 ORDER BY received_at`,
+        [c.checkout_request_id],
+      );
+      const outbox = await opts.db.query<{
+        id: string;
+        event_type: string;
+        created_at: string | Date;
+        published_at: string | Date | null;
+      }>(
+        `SELECT id, event_type, created_at, published_at
+         FROM outbox_events WHERE aggregate_id = $1 ORDER BY created_at`,
+        [c.id],
+      );
+
+      return reply.send({
+        chargeId: c.id,
+        status: c.status,
+        checkoutRequestId: c.checkout_request_id,
+        holdReason: c.hold_reason,
+        stkAttempts: c.stk_attempts,
+        reconcileAttempts: c.reconcile_attempts,
+        callbackEvents: callbacks.rows.map((e) => ({
+          id: e.id,
+          kind: e.kind,
+          resultCode: e.result_code,
+          matched: e.matched,
+          applied: e.applied,
+          duplicateCount: e.duplicate_count,
+          receivedAt: e.received_at,
+        })),
+        outboxEvents: outbox.rows.map((e) => ({
+          id: e.id,
+          eventType: e.event_type,
+          createdAt: e.created_at,
+          publishedAt: e.published_at,
+        })),
+      });
+    },
+  );
 };
 
 export default adminRoutes;

@@ -168,8 +168,9 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       **Still open:** the Grafana saturation-panel correlation, and `baseline.js`/`spike.js`
       (G3's fuller "k6 envelope" gap) — both expected to be edge-throttle-limited rather
       than POS-limited, `docs/g4-plan.md` §7.
-- [ ] **Not started, not Rigbe's to execute:** 2.1/2.2 (Nebyat), 2.4/2.5/2.6 (Meron) — see
-      `docs/g4-plan.md` §2 for the ownership split and why
+- [ ] **Not Rigbe's to execute:** 2.4/2.5/2.6 (Meron) — see the per-owner sections below
+      and `docs/g4-plan.md` §2 for the ownership split and why. 2.1/2.2 (Nebyat) are now
+      done — see Nebyat's status below.
 
 ### Meron's G4 status (2.4, 2.5, 2.6 — platform drills)
 - [x] Drill procedures written with exact commands, pre/post capture, fill-in timelines and
@@ -198,6 +199,35 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       stale-tfvars-digest bug, second occurrence), so **RPO is not claimed**; and provider
       reconciliation (runbook §2.5 step 4) needs Daraja credentials that are unset.
       `evidence/platform-delivery/g4-restore-drill.md`.
+
+### Nebyat's G4 status (2.1, 2.2 — payments drills)
+- [x] Drill runners written, one command each, that execute against a target and write a
+      timed evidence file of the real responses: `evidence/payments-integrity/drills/2.1-uncertain-payment.sh`
+      (I5, I2), `2.2-callback-replay.sh` (I3, late callback), shared `lib.sh`.
+- [x] **2.1 (uncertain payment / Daraja timeout) — EXECUTED AND TIMED against the local
+      stack, 2026-09-22.** KES 103 forces ADR 0005's deterministic timeout; the stub holds
+      the socket past the adapter's 4s timeout so Payments takes a *real* network timeout.
+      Asserted over HTTP: charge stays `PENDING` with no CheckoutRequestID (**I5**), a retry
+      returns the same charge with `created:false` and `stkAttempts` still 1 (**I2**), and 3
+      reconcile passes surface it in `/admin/pending` while it stays `PENDING` — never
+      auto-failed (**I5**, the hard half). Wall-clock 5s.
+      `evidence/payments-integrity/drills/g4-2.1-uncertain-payment-20260922T140650Z.md`.
+- [x] **2.2 (callback replay / reorder) — EXECUTED AND TIMED against the local stack,
+      2026-09-22.** KES 104 forces a duplicate callback. Asserted over HTTP: two network
+      deliveries → one `callback_events` row (`duplicateCount 1`), one transition, one
+      `sale.paid` (**I3**); a late success callback after the charge is terminal is acked,
+      recorded as its own row with `applied:false`, and produces no ledger effect (**I3**,
+      reorder). Wall-clock 2s.
+      `evidence/payments-integrity/drills/g4-2.2-callback-replay-20260922T140655Z.md`.
+- [x] Falsified, not just asserted: breaking callback dedupe in the service (removing the
+      `ON CONFLICT`) makes 2.2 fail with *"2 callback rows for two identical deliveries"* —
+      the test can fail. `local-stack.mts` stands up the real Payments HTTP surface, the real
+      `DarajaAdapter` HTTP path, and the real stub over sockets (pg-mem for the DB only).
+- [ ] **AWS run still owed.** The local stack proves the invariants and the in-service prefix
+      strip, but **not** the edge (API Gateway → ALB) or the stub's callback delivery *through*
+      that edge. That run is blocked on the stub being deployed as the `DARAJA_BASE_URL`
+      target (Platform / Meron — `services/_shared/mpesa/Dockerfile` merged in #43; deploy is
+      theirs). Same scripts, point `BASE_URL` at the edge, fill the X-Ray `trace_id` lines.
 
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,

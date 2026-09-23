@@ -6,6 +6,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { isSalePaidEvent } from '@tillflow/shared/events';
 import type { StkCallbackBody } from '@tillflow/mpesa';
 import { createHarness, chargeBody, countRows, CALLBACK_BASE, type Harness } from './harness.js';
@@ -354,6 +355,67 @@ describe('review findings — regression tests', () => {
     assert.equal(after.checkout_request_id, ref, 'the original reference stands');
     assert.equal(after.status, 'PAID');
     assert.match(after.last_push_error, /late STK ack ignored/);
+    await h.close();
+  });
+});
+
+describe('GET /admin/charges/:id/audit — I3 as a readable record', () => {
+  test('a replayed callback shows as one row with duplicateCount, and one outbox event', async () => {
+    const h = await createHarness();
+    // KES 104: the fake delivers the same success callback twice.
+    const created = await h.call({ method: 'POST', url: '/charges', payload: chargeBody({ amountMinor: 10_400 }) });
+    const chargeId = created.json().chargeId as string;
+    await h.fake.deliverPending();
+
+    const res = await h.call({ method: 'GET', url: `/admin/charges/${chargeId}/audit` });
+    assert.equal(res.statusCode, 200);
+    const audit = res.json();
+    assert.equal(audit.status, 'PAID');
+    assert.equal(audit.callbackEvents.length, 1, 'two deliveries, ONE row');
+    assert.equal(audit.callbackEvents[0].duplicateCount, 1, 'the redelivery counted, not re-applied');
+    assert.equal(audit.callbackEvents[0].applied, true);
+    assert.equal(audit.outboxEvents.length, 1, 'exactly one ledger effect');
+    assert.equal(audit.outboxEvents[0].eventType, 'sale.paid');
+    await h.close();
+  });
+
+  test('a late callback for a terminal charge adds a row that was not applied, and no outbox event', async () => {
+    const h = await createHarness();
+    const created = await h.call({ method: 'POST', url: '/charges', payload: chargeBody({ amountMinor: 25_000 }) });
+    const chargeId = created.json().chargeId as string;
+    const reference = created.json().checkoutRequestId as string;
+    await h.fake.deliverPending(); // PAID
+
+    // Out of order: a different success body for the same reference, after resolution.
+    await h.app.inject({
+      method: 'POST',
+      url: '/callbacks/stk',
+      payload: {
+        Body: {
+          stkCallback: {
+            MerchantRequestID: 'late',
+            CheckoutRequestID: reference,
+            ResultCode: 0,
+            ResultDesc: 'late',
+            CallbackMetadata: { Item: [{ Name: 'Amount', Value: 250 }, { Name: 'MpesaReceiptNumber', Value: 'LATE' }] },
+          },
+        },
+      },
+    });
+
+    const audit = (await h.call({ method: 'GET', url: `/admin/charges/${chargeId}/audit` })).json();
+    assert.equal(audit.callbackEvents.length, 2, 'different bytes, so a second row');
+    assert.equal(audit.callbackEvents.filter((e: { applied: boolean }) => e.applied).length, 1, 'applied exactly once');
+    assert.equal(audit.outboxEvents.length, 1, 'the late one had no ledger effect');
+    await h.close();
+  });
+
+  test('requires the service token, and 404s an unknown charge', async () => {
+    const h = await createHarness();
+    const anon = await h.app.inject({ method: 'GET', url: `/admin/charges/${randomUUID()}/audit` });
+    assert.equal(anon.statusCode, 401);
+    const missing = await h.call({ method: 'GET', url: `/admin/charges/${randomUUID()}/audit` });
+    assert.equal(missing.statusCode, 404);
     await h.close();
   });
 });

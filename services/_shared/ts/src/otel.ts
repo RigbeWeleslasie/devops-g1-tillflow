@@ -60,10 +60,60 @@ export function startTelemetry(opts: TelemetryOptions): void {
 
   sdk.start();
 
+  // Flush telemetry on the way down, but do NOT exit the process here.
+  //
+  // The previous version called process.exit(0) as soon as the SDK had
+  // flushed, which is wrong twice over:
+  //
+  //   1. It killed the app mid-drain. ECS sends SIGTERM and then waits
+  //      `stopTimeout` for a graceful exit; Fastify's own SIGTERM handling
+  //      and its `onClose` hooks (closing the pg pool, finishing in-flight
+  //      requests) never got to run, because telemetry raced them to exit.
+  //      A request being served when a deploy or rollback starts was simply
+  //      dropped.
+  //   2. It could hang. `shutdown()` awaits a final OTLP export; if the
+  //      collector is already gone -- which is exactly what happens when the
+  //      whole task is being torn down -- that promise may never settle, and
+  //      the task sits until ECS SIGKILLs it.
+  //
+  // So: bound the flush, then let the process end on its own terms. The
+  // handler is registered once and unrefs nothing, so a service that has its
+  // own SIGTERM handling (all of ours do, via Fastify) keeps control of when
+  // it actually exits.
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      void sdk?.shutdown().finally(() => process.exit(0));
+    process.once(signal, () => {
+      void shutdownWithTimeout();
     });
+  }
+}
+
+/**
+ * Flush telemetry, but never block shutdown on it.
+ *
+ * Losing the last few seconds of metrics is an acceptable cost; a task that
+ * will not die is not -- it shows up as a deploy that takes `stopTimeout` to
+ * roll, on every single task, which is the difference between a 30-second
+ * rollback and a two-minute one.
+ */
+async function shutdownWithTimeout(timeoutMs = 3000): Promise<void> {
+  if (!sdk) return;
+  const current = sdk;
+  sdk = undefined;
+
+  let timer: NodeJS.Timeout | undefined;
+  const bail = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+    // Do not hold the event loop open just to wait for our own timeout.
+    timer.unref?.();
+  });
+
+  try {
+    await Promise.race([current.shutdown(), bail]);
+  } catch {
+    // A failed flush must not become an unhandled rejection that takes the
+    // process down harder than the signal already was.
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

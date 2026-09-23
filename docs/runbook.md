@@ -62,7 +62,9 @@ running (`commission`/`payments` scheduled task healthy).
 **Steps:**
 1. Grafana → Payments → "Pending age" panel; get affected `checkout_request_id`s.
 2. Verify reconciler job ran: logs for `reconcile.run` spans in the last 5 min.
-3. For a sample charge, call the admin `stkQuery` endpoint; confirm state resolves.
+3. For a sample charge, `POST /admin/reconcile` (service token required) — it runs
+   `stkQuery` for every eligible PENDING charge and reports what each resolved to.
+   `GET /admin/pending` lists what is still waiting and how many looks it has had.
 4. If Daraja sandbox is down: leave charges PENDING, post status, wait. No manual state edits.
 5. Recovery signal: pending-age p95 back < threshold, backlog drains to 0.
 **Proof (G4):** force scenario `...03`, show retry creates no second charge, show trace.
@@ -76,7 +78,13 @@ confirmed.
 **Steps:**
 1. Pull the `trace_id` from the alert; in Grafana view the callback spans — expect
    "second span, zero writes".
-2. Query `SELECT count(*) FROM payments_ledger_effects WHERE charge_id = ...` — must be 1.
+2. `GET /admin/charges/<charge_id>/audit` (service token). It returns every callback
+   received for the charge and every ledger effect it produced. Both of these must hold:
+   - exactly **one** entry in `callbackEvents` has `applied: true`;
+   - `outboxEvents` has exactly **one** `sale.paid` (for a PAID charge; none otherwise).
+   A redelivery shows as `duplicateCount > 0` on the *same* `callbackEvents` row, not as a
+   second row — that is I3 holding. (There is no `ledger_effects` table; the "ledger
+   effect" of a paid charge is its `sale.paid` outbox row.)
 3. If > 1: P1. Snapshot DB, open scar-log entry, page Payments DRI.
 **Proof (G4):** replay + reorder callbacks, show one legal transition, one ledger effect,
 one explanatory trace.

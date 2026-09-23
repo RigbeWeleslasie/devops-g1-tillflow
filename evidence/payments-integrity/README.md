@@ -38,13 +38,13 @@ does *not* filter — npm does not forward the flag past the glob. Invoke
 Run everything at once:
 
 ```bash
-npm test --workspace=@tillflow/payments           # 116 tests
+npm test --workspace=@tillflow/payments           # 119 tests
 npm test --workspace=@tillflow/commission         #  62 tests
 npm test --workspace=@tillflow/mpesa              #  32 tests
 npm test --workspace=@tillflow/integration-tests  #   9 tests
 ```
 
-Or the whole repo — `npm ci && npm test` — 288 tests across seven workspaces.
+Or the whole repo — `npm ci && npm test` — 291 tests across seven workspaces.
 
 ## G3 — the SLI metrics
 
@@ -56,6 +56,30 @@ exporter that an alarm has to be written around.
 The shared metric reader landed in #19, so these now export for real — written
 against `@opentelemetry/api` throughout, so nothing in either service changed
 when it did.
+
+## G4 — drills 2.1 and 2.2, executed and timed (local stack); AWS run still owed
+
+**[`drills/`](drills/)** — one script per drill, producing the timed evidence
+`docs/g4-plan.md` §6 requires. Every assertion is over HTTP via
+`GET /admin/charges/:id/audit`, so no database access is needed to run them.
+
+**Both have now been executed and timed against the local stack** (real Payments HTTP
+surface, real `DarajaAdapter` path over sockets, real stub-server for Daraja, pg-mem for
+the DB only):
+
+- **2.1** — [`drills/g4-2.1-uncertain-payment-20260922T140650Z.md`](drills/g4-2.1-uncertain-payment-20260922T140650Z.md),
+  wall-clock 5s. I5: a real network timeout stays `PENDING`, no CheckoutRequestID, and
+  survives the reconciler giving up. I2: a retry pushes nothing.
+- **2.2** — [`drills/g4-2.2-callback-replay-20260922T140655Z.md`](drills/g4-2.2-callback-replay-20260922T140655Z.md),
+  wall-clock 2s. I3: two deliveries → one row, one transition, one `sale.paid`; a late
+  callback after resolution applies nothing.
+
+Falsified, not just asserted — breaking callback dedupe makes 2.2 fail. **What the local
+run does not prove: the AWS edge (API Gateway → ALB) and the stub's callback delivery
+*through* that edge.** The AWS run of the same scripts is still owed; its prerequisite is
+the M-Pesa stub deployed and `devops-g1/daraja.base_url` pointed at it (Platform's, image
+merged in #43). See [`drills/README.md`](drills/README.md) for why Safaricom credentials
+alone would not unblock them.
 
 ## G5 — a success callback is a notification, not evidence
 

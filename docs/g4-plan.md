@@ -31,7 +31,7 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 | 2.5 | Restore from backup | **Meron** | none (RDS is already up) | not started |
 | 2.6 | External probe (canary) failing | **Meron** | canary live (✅ confirmed) | not started |
 | 2.7 | Elevated error rate/latency | — | n/a | not a dedicated drill — covered by 2.3 and 2.4 (`runbook.md`'s own note) |
-| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), full flow for soak | ✅ **soak done 2026-09-22** — 15-min k6 soak vs. the deployed target, all thresholds green, no leak (`evidence/reliability-ops/g4-soak-drill.md`). Grafana panel correlation and the baseline/spike half of the k6 envelope still open — see §7 |
+| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), `payments` deployed (✅) | ✅ **soak done 2026-09-22** — 15-min k6 soak vs. the deployed target, all thresholds green, no leak (`evidence/reliability-ops/g4-soak-drill.md`). `baseline.js`/`spike.js` still open — the edge throttles at 50 rps (`k6/README.md`, `docs/scar-log.md` 2026-09-21), so those two measure the throttle, not the service; decided to run them as-is and report edge-limited, see §7 |
 | 2.10 | Error budget burn / game-day | **Rigbe** | 2.3/2.8 landing cleanly | ✅ **done 2026-09-20** — same drill as 2.3/2.8 produced it, per §5's own plan (`evidence/reliability-ops/g4-worker-down-drill.md`) |
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
