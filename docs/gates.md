@@ -161,10 +161,16 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
 - [x] **2.10 (game-day) — done as the natural byproduct of 2.3/2.8**, per the plan's own
       design: one real firing + one real recovery Slack message, both checked against the
       9-field contract. Same evidence file.
-- [ ] **Not started:** 2.9 (resource saturation / k6 soak) — needs `payments` deployed too
-      for a full sale→pay flow, not just `pos`
-- [ ] **Not Rigbe's to execute:** 2.1/2.2 (Nebyat), 2.4/2.5/2.6 (Meron) — see the per-owner
-      sections below and `docs/g4-plan.md` §2 for the ownership split and why
+- [x] **2.9 (resource saturation / k6 soak) — executed 2026-09-22, real target.** 15-minute
+      soak (1m ramp / 15m hold / 1m down) against the live deployed edge, `payments`
+      included in the flow. All thresholds green: `checks` 100%, `http_req_failed` 0%,
+      `p(95)` 61ms. `evidence/reliability-ops/g4-soak-drill.md`.
+      **Still open:** the Grafana saturation-panel correlation, and `baseline.js`/`spike.js`
+      (G3's fuller "k6 envelope" gap) — both expected to be edge-throttle-limited rather
+      than POS-limited, `docs/g4-plan.md` §7.
+- [ ] **Not Rigbe's to execute:** 2.4/2.5/2.6 (Meron) — see the per-owner sections below
+      and `docs/g4-plan.md` §2 for the ownership split and why. 2.1/2.2 (Nebyat) are now
+      done — see Nebyat's status below.
 
 ### Meron's G4 status (2.4, 2.5, 2.6 — platform drills)
 - [x] Drill procedures written with exact commands, pre/post capture, fill-in timelines and

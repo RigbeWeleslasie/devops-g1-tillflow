@@ -4,8 +4,12 @@
 - **Status:** All alarm-triggerable procedures written for G3 (2.1–2.10) and indexed so
   every alarm's `runbook link` resolves to a real section. **2.3/2.8/2.10 rehearsed and
   timed for real** (2026-09-20, `evidence/reliability-ops/g4-worker-down-drill.md`) —
-  real backlog, real alarm, real Slack firing/recovery, 7m30s detect / 5m54s recover. The
-  rest (2.1/2.2/2.4/2.5/2.6/2.9) are G4 work still open — see `docs/g4-plan.md`.
+  real backlog, real alarm, real Slack firing/recovery, 7m30s detect / 5m54s recover.
+  **2.9 exercised for real** (2026-09-22, `evidence/reliability-ops/g4-soak-drill.md`) — a
+  15-minute k6 soak against the live deployed target, all thresholds green, no leak or
+  backlog growth; the Grafana saturation-panel correlation and the rest of the k6 envelope
+  (baseline/spike) are still open, see that file. The rest (2.1/2.2/2.4/2.5/2.6) are G4
+  work still open — see `docs/g4-plan.md`.
 
 ## 0. On-call basics
 
