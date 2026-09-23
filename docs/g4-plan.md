@@ -129,9 +129,14 @@ The all-gates review (2026-09-22) named this directly: G3's "k6 envelope" needs
 against the deployed target, not just `soak.js`. Status:
 
 - **`soak.js` — done 2026-09-22**, §2's table and `evidence/reliability-ops/g4-soak-drill.md`.
-- **`baseline.js` and `spike.js` — not yet run.** Both cross the live 50 rps API Gateway
-  throttle (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own limit
-  would show up — baseline's default steps reach 100 VUs, spike hits 100 VUs by design.
+- **`baseline.js` — done 2026-09-23**, confirms the edge-limited reading directly: thresholds
+  breach as expected under 100 VUs (`checks` 32%, `http_req_failed` 66%), but latency for
+  requests that get through stays flat (p95 61ms) — a gate rejecting requests, not POS
+  degrading under load. `evidence/reliability-ops/k6-baseline-run.md`.
+- **`spike.js` — not yet run.** Both `baseline.js` and `spike.js` cross the live 50 rps API
+  Gateway throttle (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own
+  limit would show up — baseline's default steps reach 100 VUs, spike hits 100 VUs by
+  design.
 - **Decision (2026-09-22): run them as-is against the live throttle and report the result
   as edge-limited, rather than asking Meron to raise the throttle for a test window.** No
   infra change, no coordination cost, no risk to the shared environment — the tradeoff is
