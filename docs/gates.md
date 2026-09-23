@@ -143,7 +143,9 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       API Gateway throttle while successful-request latency stays flat — read as
       edge-limited, not POS's own ceiling, per `docs/g4-plan.md` §7's decision.
       `evidence/reliability-ops/g4-soak-drill.md`, `k6-baseline-run.md`, `k6-spike-run.md`.
-      **Still open:** the Grafana saturation-panel correlation for the soak window.
+      Grafana saturation-panel correlation confirmed for the soak window too — latency and
+      CPU/memory rise and fall exactly with the run, queue age flat at 0
+      (`g4-soak-grafana-correlation.png`).
 
 ## G4 — Recover (D13)
 Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsal.
@@ -168,9 +170,10 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
 - [x] **2.9 (resource saturation / k6 soak) — executed 2026-09-22, real target.** 15-minute
       soak (1m ramp / 15m hold / 1m down) against the live deployed edge, `payments`
       included in the flow. All thresholds green: `checks` 100%, `http_req_failed` 0%,
-      `p(95)` 61ms. `evidence/reliability-ops/g4-soak-drill.md`. The rest of the k6 envelope
-      (`baseline.js`/`spike.js`, G3's own gap) is also now done — see the G3 section above.
-      **Still open:** the Grafana saturation-panel correlation for the soak window.
+      `p(95)` 61ms. `evidence/reliability-ops/g4-soak-drill.md`, with a real Grafana
+      screenshot confirming latency/CPU/memory rise and fall with the run window and
+      queue age stays flat. The rest of the k6 envelope (`baseline.js`/`spike.js`, G3's own
+      gap) is also now done — see the G3 section above. This closes 2.9 in full.
 - [ ] **Not Rigbe's to execute:** 2.4/2.5/2.6 (Meron) — see the per-owner sections below
       and `docs/g4-plan.md` §2 for the ownership split and why. 2.1/2.2 (Nebyat) are now
       done — see Nebyat's status below.

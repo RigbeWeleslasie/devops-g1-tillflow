@@ -36,8 +36,13 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
 table above: a Grafana dashboard export, a k6 analysis with the highest sustained RPS,
-and one timed game-day drill with a firing + recovery Slack alert. The game-day drill is
-✅ done (see above). Grafana export and k6-against-real-target are still open.
+and one timed game-day drill with a firing + recovery Slack alert. **All three are now
+done:** game-day (see above); Grafana export
+(`evidence/reliability-ops/grafana-slo-dashboard-export.json`); k6 against the real
+deployed target, all three scenarios, with a Grafana screenshot correlating the soak run
+(§7, `evidence/reliability-ops/g4-soak-drill.md`). "Highest sustained RPS" landed as an
+edge-throttle number (~40 rps, `docs/g4-edge-throttle-caveat`), not a POS capacity ceiling
+— named as such throughout, per the 2026-09-22 decision.
 
 ## 3. Current real state (as of 2026-09-19, updated mid-session — re-check before trusting this)
 
