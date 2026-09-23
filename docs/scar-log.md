@@ -125,7 +125,7 @@ incident or painful surprise. Blameless. Newest first.
   Worth stating plainly for G5: this is a **human-at-a-terminal** problem only. CI passes
   `-var 'service_images={}'` explicitly and is immune. The exposure is exactly the
   destroy/rebuild G5 grades, where someone applies by hand under time pressure.
-=======
+
 ### 2026-09-19 — a backlogged daily-close trigger would have closed the same day four times and skipped three
 - **Area:** services/commission (worker), infra (scheduler)
 - **What happened:** `devops-g1-commission-payout-age` fired on a real backlog — 4 messages,
