@@ -31,7 +31,7 @@ to be the one who actually runs their own drill — not have Rigbe run it for th
 | 2.5 | Restore from backup | **Meron** | none (RDS is already up) | not started |
 | 2.6 | External probe (canary) failing | **Meron** | canary live (✅ confirmed) | not started |
 | 2.7 | Elevated error rate/latency | — | n/a | not a dedicated drill — covered by 2.3 and 2.4 (`runbook.md`'s own note) |
-| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), full flow for soak | partially ready — see §4 |
+| 2.9 | Resource saturation | **Rigbe** | `pos` deployed (✅), full flow for soak | ✅ **soak done 2026-09-22** — 15-min k6 soak vs. the deployed target, all thresholds green, no leak (`evidence/reliability-ops/g4-soak-drill.md`). Grafana panel correlation and the baseline/spike half of the k6 envelope still open — see §7 |
 | 2.10 | Error budget burn / game-day | **Rigbe** | 2.3/2.8 landing cleanly | ✅ **done 2026-09-20** — same drill as 2.3/2.8 produced it, per §5's own plan (`evidence/reliability-ops/g4-worker-down-drill.md`) |
 
 Rigbe's own minimum personal proof (`docs/ownership.md`, Area 4), independent of the
@@ -121,3 +121,20 @@ just to have a dedicated "game day" would be theater. The real plan:
   artifacts, not just a live dashboard someone would have to log in to see.
 - `docs/gates.md`'s G4 section reflects all of the above, in the same checklist style
   used for G3.
+
+## 7. The k6 envelope (2.9's other half, and G3's own gap)
+
+The all-gates review (2026-09-22) named this directly: G3's "k6 envelope" needs
+`baseline.js` (finds the knee / highest sustained RPS) and `spike.js` (burst recovery) run
+against the deployed target, not just `soak.js`. Status:
+
+- **`soak.js` — done 2026-09-22**, §2's table and `evidence/reliability-ops/g4-soak-drill.md`.
+- **`baseline.js` and `spike.js` — not yet run.** Both cross the live 50 rps API Gateway
+  throttle (`docs/g4-edge-throttle-caveat`, `k6/README.md`) well before POS's own limit
+  would show up — baseline's default steps reach 100 VUs, spike hits 100 VUs by design.
+- **Decision (2026-09-22): run them as-is against the live throttle and report the result
+  as edge-limited, rather than asking Meron to raise the throttle for a test window.** No
+  infra change, no coordination cost, no risk to the shared environment — the tradeoff is
+  that the knee these two runs find is the throttle's, not POS's own capacity ceiling. That
+  is still real, useful information (`docs/g4-edge-throttle-caveat` records the reasoning);
+  it should be written up as such, not presented as POS's actual limit.
