@@ -162,14 +162,26 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       narrative in the evidence file. **Still open:** the Grafana-side trace workflow
       (`docs/runbook.md`'s "pull `trace_id` from an alert, open it in Grafana") stays
       blocked on that plugin bug specifically.
-- [ ] **Caching before/after (k6's "Report" section, `k6/README.md`) — DRI is Rigbe,**
-      same file this line lives in. **Real blocker found while checking this, not assumed:**
-      `infra/data.tf` provisions a real `aws_elasticache_replication_group` (Valkey), and
-      `docs/architecture.md` documents cache-aside for "tenant config, rates, catalog" —
-      but `services/pos/src` has **zero references to Redis/cache anywhere** (checked by
-      grep, not inferred). There is no cache-aside code path to compare before/after
-      against; this isn't "no k6 run yet," it's that the feature itself was never built.
-      Naming this plainly rather than leaving it as a vague "not done yet."
+- [ ] **Caching before/after — the honest answer, not a to-do.** The review's own wording
+      (*"no caching before/after"*, listed alongside highest-RPS/bottleneck/headroom as one
+      k6-derived measurement) only makes sense if it assumed cache-aside code already
+      existed and just hadn't been benchmarked — a fair assumption from outside, since
+      `docs/architecture.md` documents cache-aside by design and `infra/data.tf` really does
+      provision an `aws_elasticache_replication_group` (Valkey). Checked the actual code,
+      not assumed: **`services/pos/src` has zero cache/Redis code anywhere** — no client
+      library installed, no Redis endpoint wired into any service's env
+      (`infra/service-mesh.tf`). There is nothing to compare before/after; "before" and
+      "after" would be identical requests. This is the real answer to the review's question,
+      not an unstarted checkbox.
+      **DRI is Rigbe** (same file this line lives in, `k6/README.md`'s Report section).
+      **For whoever eventually builds it** (a separate, still-open decision, not resolved
+      here): the two read paths on the actual k6 `baseline.js` flow, found by tracing the
+      code, are `saleService.ts`'s product lookup inside `createSale` (`SELECT ... FROM
+      products WHERE id = $1 AND tenant_id = $2 AND active = true`) and its tenant
+      till-number lookup inside `paySale` — caching either would show up in a real k6
+      before/after. Neither has an update path today (no product-update or
+      tenant-till-update endpoint exists), so a bounded TTL alone would be correct; no
+      invalidation-on-write logic is needed yet.
 - [x] **k6 envelope run/analysis against the real deployed target — all three scenarios,
       2026-09-22/23.** `soak.js`: 15 min at 15 VUs, all thresholds green, ~40 rps sustained,
       no leak. `baseline.js` and `spike.js`: thresholds breach exactly at the live 50 rps
