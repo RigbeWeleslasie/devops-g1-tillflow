@@ -134,9 +134,29 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       Plumbing is Area 3's; the contract it's proving is Area 4's, which is why this line
       is here. Not yet a **timed** drill against a real induced failure — that's G4's
       game-day deliverable, not this checkbox.
-- [ ] **In progress:** Grafana panels with live data — data sources now have real metrics
-      to read; dashboard build spec ready (`evidence/reliability-ops/grafana-dashboard-spec.md`),
-      not yet built.
+- [x] **Grafana panels with live data — built and exported.** Two dashboards,
+      `devops-g1-capacity-dashboard` and `devops-g1-slo-dashboard` (18 panels: uptime,
+      error budget, fast/slow burn, latency, ECS, queue age), both confirmed rendering
+      real data, not just imported.
+      `evidence/reliability-ops/grafana-dashboard-export.md`, `grafana-slo-dashboard.md`.
+- [ ] **Traces (OTLP → X-Ray) — DRI is Rigbe** (`docs/ownership.md`'s "Telemetry
+      (spans/metrics/logs)" row: *"Grafana export + traces"*), not ambiguous, despite an
+      earlier informal note in this session treating it as unowned. Infra is fully ready,
+      confirmed by reading the actual Terraform, not assumed: the ADOT sidecar exports
+      spans via `awsxray` (`infra/ecs.tf`), the Grafana workspace's IAM role can read
+      X-Ray (`infra/observability.tf`'s `ReadXRay` statement), and the workspace resource
+      itself explicitly lists `data_sources = ["CLOUDWATCH", "XRAY"]`. **What's actually
+      missing is one manual step** — an X-Ray data source connection has never been added
+      inside the Grafana UI (unlike CloudWatch's, which was) — plus capturing and
+      committing one real trace as evidence.
+- [ ] **Caching before/after (k6's "Report" section, `k6/README.md`) — DRI is Rigbe,**
+      same file this line lives in. **Real blocker found while checking this, not assumed:**
+      `infra/data.tf` provisions a real `aws_elasticache_replication_group` (Valkey), and
+      `docs/architecture.md` documents cache-aside for "tenant config, rates, catalog" —
+      but `services/pos/src` has **zero references to Redis/cache anywhere** (checked by
+      grep, not inferred). There is no cache-aside code path to compare before/after
+      against; this isn't "no k6 run yet," it's that the feature itself was never built.
+      Naming this plainly rather than leaving it as a vague "not done yet."
 - [x] **k6 envelope run/analysis against the real deployed target — all three scenarios,
       2026-09-22/23.** `soak.js`: 15 min at 15 VUs, all thresholds green, ~40 rps sustained,
       no leak. `baseline.js` and `spike.js`: thresholds breach exactly at the live 50 rps
