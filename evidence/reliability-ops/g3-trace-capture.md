@@ -7,10 +7,27 @@ is the artifact, that section is the narrative.
 ## What was captured
 
 A real `POST /api/pos/tenants` request against the deployed edge (2026-09-24, ~15:41 UTC)
-produced trace **`1-98771370-d73ccb29281626cea3fd08b9`**, read via `aws xray
-get-trace-summaries` / `batch-get-traces` under the `devops-g1` SSO profile, then viewed in
-the AWS X-Ray console (CloudWatch → X-Ray → Traces) and screenshotted:
-[`g3-trace-capture.png`](g3-trace-capture.png).
+produced trace **`1-98771370-d73ccb29281626cea3fd08b9`**, viewed in the AWS X-Ray console
+(CloudWatch → X-Ray → Traces) and screenshotted: [`g3-trace-capture.png`](g3-trace-capture.png).
+
+Per `evidence/README.md`'s standard, the screenshot is not the evidence by itself — the raw
+trace document is: [`g3-trace-capture.json`](g3-trace-capture.json), the exact output of
+
+```bash
+aws xray batch-get-traces --profile devops-g1 \
+  --trace-ids 1-98771370-d73ccb29281626cea3fd08b9 --output json
+```
+
+(pretty-printed for readability; `.Traces[0].Id` in the file matches the ID above, and
+`.Traces[0].Segments[*].Document` — each a JSON string, parse individually — contains the
+same span names/durations as the table below and the screenshot). Trace summaries in the
+same window are reproducible with:
+
+```bash
+aws xray get-trace-summaries --profile devops-g1 \
+  --start-time "2026-09-24T15:40:55Z" --end-time "2026-09-24T15:41:10Z" \
+  --filter-expression 'service("pos")'
+```
 
 The waterfall, exactly as `docs/architecture.md`'s "Span boundaries: inbound HTTP, DB
 query..." describes:

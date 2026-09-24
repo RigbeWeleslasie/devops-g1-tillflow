@@ -312,9 +312,12 @@ destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend own
 - [ ] Individual defence — live viva, not a repo artifact.
 
 ### Cross-cutting G5 items
-- [ ] **Traces not captured** (Area 4). X-Ray holds them — 99 `pos` and 56 `payments`
-      traces were visible in the console — but no artifact is committed, and
-      `evidence/README.md` is explicit that screenshots alone earn no credit.
+- [x] **Traces captured, with a real linked artifact — closed.** The screenshot alone
+      wasn't enough per `evidence/README.md`'s own rule (caught by this exact line, thank
+      you) — added the raw trace document, `evidence/reliability-ops/g3-trace-capture.json`
+      (`aws xray batch-get-traces --trace-ids 1-98771370-d73ccb29281626cea3fd08b9`), plus the
+      exact reproduce command, alongside the screenshot and narrative in
+      `g3-trace-capture.md`.
 - [ ] **Restore reconciliation** (Area 2). `g4-restore-drill.md` records it as designed,
       not executed: it needs `devops-g1/daraja` pointed at the M-Pesa stub, per the
       finding in `evidence/payments-integrity/drills/README.md`.
