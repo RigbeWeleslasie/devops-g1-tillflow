@@ -191,12 +191,18 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       the outage ECS reported **2/2 running** and the ALB target group **`healthy healthy`**
       while the external probe read **0.0**: the blocker justifying itself. `terraform plan`
       after the drill shows no drift from it. `evidence/platform-delivery/g4-canary-edge-drill.md`.
-- [ ] **2.4 (broken release / rollback) — blocked on the `prod` GitHub environment.**
-      `deploy.yml`'s `release` job carries `environment: prod`, which has no required
-      reviewer, so the job has never run and every deploy so far has been a manual
-      `aws ecs update-service`. Configuring that reviewer (a G0 open item, platform DRI)
-      unblocks this drill *and* G5's fresh-commit release. Fallback: `infra/scripts/deploy.sh`
-      proves the mechanism but not the pipeline — which the write-up must say plainly.
+- [x] **2.4 (broken release / rollback) — EXECUTED AND TIMED, 2026-09-24.** Deploy run #56
+      from `drill/g4-broken-release`, a branch whose POS Dockerfile bakes a deliberately
+      wrong `COMMIT_SHA`. The task started cleanly, `/health` and `/ready` both returned
+      200 and the ALB target went healthy — so ECS's circuit breaker never engaged — and
+      `infra/scripts/smoke.sh` caught it on the `/version` assertion alone. **Detection
+      2m 03s, recovery 4m 11s, total exposure 3m 42s**; `deploy.yml`'s own "Rollback on
+      smoke failure" step fired (`Warning: rolling back to …/devops-g1-pos:39`), not the
+      circuit breaker, and production ended on the exact pre-drill revision serving
+      `583ff63`. The workflow is red on purpose: a bad release fails the pipeline rather
+      than passing after self-repair.
+      `evidence/platform-delivery/g4-rollback-drill.md`.
+
 - [x] **2.5 (restore from backup) — EXECUTED AND TIMED, 2026-09-21.** PITR restore to a new
       instance `devops-g1-restore-202609210701` started 07:01:28Z, `available` 07:21:20Z:
       **RTO 19m 52s** against the runbook's 30-minute target. Production `devops-g1` untouched.
