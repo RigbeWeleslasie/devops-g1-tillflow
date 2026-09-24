@@ -1,0 +1,45 @@
+---------------------------------------------------
+|                 DescribeAlarms                  |
++-------------------------------------------------+
+||                   composite                   ||
+|+-----------------------------------------+-----+|
+||                    n                    |  s  ||
+|+-----------------------------------------+-----+|
+||  devops-g1-pos-budget-fast-burn-page    |  OK ||
+||  devops-g1-pos-budget-slow-burn-ticket  |  OK ||
+|+-----------------------------------------+-----+|
+||                    metric                     ||
+|+--------------------------------------+--------+|
+||                   n                  |   s    ||
+|+--------------------------------------+--------+|
+||  devops-g1-apigw-5xx                 |  OK    ||
+||  devops-g1-commission-cpu            |  OK    ||
+||  devops-g1-commission-memory         |  OK    ||
+||  devops-g1-commission-payout-age     |  OK    ||
+||  devops-g1-commission-payout-dlq     |  ALARM ||
+||  devops-g1-payments-cpu              |  OK    ||
+||  devops-g1-payments-memory           |  OK    ||
+||  devops-g1-payments-p95-latency      |  OK    ||
+||  devops-g1-payments-target-5xx       |  OK    ||
+||  devops-g1-payments-unhealthy-hosts  |  OK    ||
+||  devops-g1-pos-budget-below-25pct    |  OK    ||
+||  devops-g1-pos-budget-fast-burn      |  OK    ||
+||  devops-g1-pos-budget-fast-burn-5m   |  OK    ||
+||  devops-g1-pos-budget-slow-burn      |  OK    ||
+||  devops-g1-pos-budget-slow-burn-30m  |  OK    ||
+||  devops-g1-pos-cpu                   |  OK    ||
+||  devops-g1-pos-memory                |  OK    ||
+||  devops-g1-pos-p95-latency           |  OK    ||
+||  devops-g1-pos-target-5xx            |  OK    ||
+||  devops-g1-pos-unhealthy-hosts       |  OK    ||
+||  devops-g1-rds-cpu                   |  OK    ||
+||  devops-g1-rds-storage               |  OK    ||
+||  devops-g1-sale-events-age           |  OK    ||
+||  devops-g1-sale-events-dlq           |  OK    ||
+||  devops-g1-uptime-probe-failing      |  OK    ||
+||  devops-g1-web-cpu                   |  OK    ||
+||  devops-g1-web-memory                |  OK    ||
+||  devops-g1-web-p95-latency           |  OK    ||
+||  devops-g1-web-target-5xx            |  OK    ||
+||  devops-g1-web-unhealthy-hosts       |  OK    ||
+|+--------------------------------------+--------+|
