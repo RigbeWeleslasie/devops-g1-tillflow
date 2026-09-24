@@ -142,38 +142,49 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       error budget, fast/slow burn, latency, ECS, queue age), both confirmed rendering
       real data, not just imported.
       `evidence/reliability-ops/grafana-dashboard-export.md`, `grafana-slo-dashboard.md`.
-- [ ] **Traces (OTLP → X-Ray) — DRI is Rigbe** (`docs/ownership.md`'s "Telemetry
-      (spans/metrics/logs)" row: *"Grafana export + traces"*), not ambiguous, despite an
-      earlier informal note in this session treating it as unowned. Application-level infra
-      is fully ready, confirmed by reading the actual Terraform, not assumed: the ADOT
-      sidecar exports spans via `awsxray` (`infra/ecs.tf`), the Grafana workspace's IAM role
-      can read X-Ray (`infra/observability.tf`'s `ReadXRay` statement), and the workspace
-      resource itself explicitly lists `data_sources = ["CLOUDWATCH", "XRAY"]`.
-      **Real blocker found by actually trying it, not inferred:** `Connections → Data
-      sources` showed two CloudWatch connections and no X-Ray one, and adding it from the
-      catalog failed with "You do not have permission to install this plugin" — **even for
-      a confirmed Grafana org Admin** (checked: `Administration → Users`, role = `Admin`).
-      Not Grafana RBAC, then — Amazon Managed Grafana gates *all* plugin installs, including
-      AWS's own X-Ray data source, behind a workspace-level **"Plugin management"** setting,
-      separate from the `data_sources` list and separate from Grafana's own roles.
-      **Resolved directly, no Meron needed:** `aws grafana update-workspace-configuration
-      --workspace-id g-abb9c4666f --workspace-configuration
-      '{"plugins":{"pluginAdminEnabled":true}}'` succeeded under Rigbe's own `devops-g1` SSO
-      profile — the IAM permission for this was already there, it just isn't something
-      `aws_grafana_workspace` (Terraform) exposes as an argument, so it had to be a direct
-      API call, same pattern as the `pos-worker` cutover. `aws_grafana_workspace` in
-      `infra/observability.tf` is still tagged `owner = "meron"`, so worth telling them this
-      setting changed on their resource — not asking permission, just keeping them informed.
-      **Still open:** add the X-Ray data source in the UI now that installs are unblocked,
-      then capture and commit one real trace as evidence.
-- [ ] **Caching before/after (k6's "Report" section, `k6/README.md`) — DRI is Rigbe,**
-      same file this line lives in. **Real blocker found while checking this, not assumed:**
-      `infra/data.tf` provisions a real `aws_elasticache_replication_group` (Valkey), and
-      `docs/architecture.md` documents cache-aside for "tenant config, rates, catalog" —
-      but `services/pos/src` has **zero references to Redis/cache anywhere** (checked by
-      grep, not inferred). There is no cache-aside code path to compare before/after
-      against; this isn't "no k6 run yet," it's that the feature itself was never built.
-      Naming this plainly rather than leaving it as a vague "not done yet."
+- [x] **Traces (OTLP → X-Ray) — captured, 2026-09-24. DRI is Rigbe**
+      (`docs/ownership.md`'s "Telemetry (spans/metrics/logs)" row: *"Grafana export +
+      traces"*), not ambiguous, despite an earlier informal note in this session treating
+      it as unowned. A real `POST /api/pos/tenants` against the deployed edge produced
+      trace `1-98771370-d73ccb29281626cea3fd08b9`: `pos` (201, 52ms) →
+      `pg-pool.connect`/`pg.connect`/`tcp.connect`/`dns.lookup` → `BEGIN` → two `INSERT`s →
+      `COMMIT` — the real inbound-HTTP + DB-query span chain `docs/architecture.md`
+      documents, screenshotted from the AWS X-Ray console.
+      `evidence/reliability-ops/g3-trace-capture.md` + `.png`.
+      **Real, previously-undocumented blockers found and cleared along the way, not
+      assumed:** Amazon Managed Grafana gates *all* plugin installs (even AWS's own X-Ray
+      data source) behind a workspace-level "Plugin management" setting — separate from
+      Grafana's own RBAC (confirmed as org Admin, still blocked) and separate from
+      Terraform's `data_sources` list, and not a `aws_grafana_workspace` argument at all, so
+      it needed a direct `aws grafana update-workspace-configuration` call (same pattern as
+      the `pos-worker` cutover) — resolved directly under Rigbe's own `devops-g1` SSO
+      permissions, no Meron action needed, though the resource is tagged `owner = "meron"`
+      so worth telling them it changed. Once installed, the X-Ray data source's own config
+      UI failed to render (reproducible plugin bug, not a permissions issue) — worked around
+      by reading the same trace data through the native AWS X-Ray console instead. Full
+      narrative in the evidence file. **Still open:** the Grafana-side trace workflow
+      (`docs/runbook.md`'s "pull `trace_id` from an alert, open it in Grafana") stays
+      blocked on that plugin bug specifically.
+- [ ] **Caching before/after — the honest answer, not a to-do.** The review's own wording
+      (*"no caching before/after"*, listed alongside highest-RPS/bottleneck/headroom as one
+      k6-derived measurement) only makes sense if it assumed cache-aside code already
+      existed and just hadn't been benchmarked — a fair assumption from outside, since
+      `docs/architecture.md` documents cache-aside by design and `infra/data.tf` really does
+      provision an `aws_elasticache_replication_group` (Valkey). Checked the actual code,
+      not assumed: **`services/pos/src` has zero cache/Redis code anywhere** — no client
+      library installed, no Redis endpoint wired into any service's env
+      (`infra/service-mesh.tf`). There is nothing to compare before/after; "before" and
+      "after" would be identical requests. This is the real answer to the review's question,
+      not an unstarted checkbox.
+      **DRI is Rigbe** (same file this line lives in, `k6/README.md`'s Report section).
+      **For whoever eventually builds it** (a separate, still-open decision, not resolved
+      here): the two read paths on the actual k6 `baseline.js` flow, found by tracing the
+      code, are `saleService.ts`'s product lookup inside `createSale` (`SELECT ... FROM
+      products WHERE id = $1 AND tenant_id = $2 AND active = true`) and its tenant
+      till-number lookup inside `paySale` — caching either would show up in a real k6
+      before/after. Neither has an update path today (no product-update or
+      tenant-till-update endpoint exists), so a bounded TTL alone would be correct; no
+      invalidation-on-write logic is needed yet.
 - [x] **k6 envelope run/analysis against the real deployed target — all three scenarios,
       2026-09-22/23.** `soak.js`: 15 min at 15 VUs, all thresholds green, ~40 rps sustained,
       no leak. `baseline.js` and `spike.js`: thresholds breach exactly at the live 50 rps
