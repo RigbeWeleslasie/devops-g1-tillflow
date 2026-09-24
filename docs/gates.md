@@ -144,14 +144,28 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       `evidence/reliability-ops/grafana-dashboard-export.md`, `grafana-slo-dashboard.md`.
 - [ ] **Traces (OTLP → X-Ray) — DRI is Rigbe** (`docs/ownership.md`'s "Telemetry
       (spans/metrics/logs)" row: *"Grafana export + traces"*), not ambiguous, despite an
-      earlier informal note in this session treating it as unowned. Infra is fully ready,
-      confirmed by reading the actual Terraform, not assumed: the ADOT sidecar exports
-      spans via `awsxray` (`infra/ecs.tf`), the Grafana workspace's IAM role can read
-      X-Ray (`infra/observability.tf`'s `ReadXRay` statement), and the workspace resource
-      itself explicitly lists `data_sources = ["CLOUDWATCH", "XRAY"]`. **What's actually
-      missing is one manual step** — an X-Ray data source connection has never been added
-      inside the Grafana UI (unlike CloudWatch's, which was) — plus capturing and
-      committing one real trace as evidence.
+      earlier informal note in this session treating it as unowned. Application-level infra
+      is fully ready, confirmed by reading the actual Terraform, not assumed: the ADOT
+      sidecar exports spans via `awsxray` (`infra/ecs.tf`), the Grafana workspace's IAM role
+      can read X-Ray (`infra/observability.tf`'s `ReadXRay` statement), and the workspace
+      resource itself explicitly lists `data_sources = ["CLOUDWATCH", "XRAY"]`.
+      **Real blocker found by actually trying it, not inferred:** `Connections → Data
+      sources` showed two CloudWatch connections and no X-Ray one, and adding it from the
+      catalog failed with "You do not have permission to install this plugin" — **even for
+      a confirmed Grafana org Admin** (checked: `Administration → Users`, role = `Admin`).
+      Not Grafana RBAC, then — Amazon Managed Grafana gates *all* plugin installs, including
+      AWS's own X-Ray data source, behind a workspace-level **"Plugin management"** setting,
+      separate from the `data_sources` list and separate from Grafana's own roles.
+      **Resolved directly, no Meron needed:** `aws grafana update-workspace-configuration
+      --workspace-id g-abb9c4666f --workspace-configuration
+      '{"plugins":{"pluginAdminEnabled":true}}'` succeeded under Rigbe's own `devops-g1` SSO
+      profile — the IAM permission for this was already there, it just isn't something
+      `aws_grafana_workspace` (Terraform) exposes as an argument, so it had to be a direct
+      API call, same pattern as the `pos-worker` cutover. `aws_grafana_workspace` in
+      `infra/observability.tf` is still tagged `owner = "meron"`, so worth telling them this
+      setting changed on their resource — not asking permission, just keeping them informed.
+      **Still open:** add the X-Ray data source in the UI now that installs are unblocked,
+      then capture and commit one real trace as evidence.
 - [ ] **Caching before/after (k6's "Report" section, `k6/README.md`) — DRI is Rigbe,**
       same file this line lives in. **Real blocker found while checking this, not assumed:**
       `infra/data.tf` provisions a real `aws_elasticache_replication_group` (Valkey), and
