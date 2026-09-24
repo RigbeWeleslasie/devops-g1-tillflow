@@ -305,10 +305,17 @@ destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend own
 - [x] **Pre-destroy snapshot — captured.** Alarm inventory (32), 72h of probe history and
       28 timestamped Slack deliveries: the live state a destroy erases.
       `evidence/platform-delivery/pre-destroy/`.
-- [ ] **Destroy -> rebuild — PLANNED, not executed.** Procedure, pre-flight checks and the
-      acceptance test written: `evidence/platform-delivery/g5-destroy-rebuild.md`. The
-      acceptance test is a tenant write returning 201, **not** `/health` — `/health`
-      touches no database and stays green through exactly the failure this has hit twice.
+- [x] **Destroy -> rebuild — EXECUTED, 2026-09-24.** 286 resources destroyed, 286 rebuilt,
+      and a tenant write returned **201** against a brand-new database through a brand-new
+      edge (`ayh1c5n3xd`, replacing `k0lzgyvn1i`). Destroy ~57 min including recovery from
+      a partial failure; rebuild to a working money path ~62 min. **Both bugs that had
+      been hand-patched on the old stack stayed fixed without intervention** — the edge
+      prefix strip worked on the first release, and the migration wrote
+      `sslmode=require` automatically because a fresh database means a freshly created
+      role. Two findings kept rather than smoothed over: the destroy is **not one-shot**
+      (an orphaned ECS task held an ENI, and four ECR repos were non-empty), and a rebuild
+      needs an **extra service restart** after migrations because ECS injects secrets at
+      task start. `evidence/platform-delivery/g5-destroy-rebuild.md`.
 - [ ] Individual defence — live viva, not a repo artifact.
 
 ### Cross-cutting G5 items
