@@ -147,18 +147,22 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       can read X-Ray (`infra/observability.tf`'s `ReadXRay` statement), and the workspace
       resource itself explicitly lists `data_sources = ["CLOUDWATCH", "XRAY"]`.
       **Real blocker found by actually trying it, not inferred:** `Connections → Data
-      sources` shows two CloudWatch connections and no X-Ray one, and adding it from the
-      catalog fails with "You do not have permission to install this plugin" —
-      **even for a confirmed Grafana org Admin** (checked: `Administration → Users`,
-      role = `Admin`). So this isn't Grafana RBAC. Amazon Managed Grafana gates *all*
-      plugin installs, including AWS's own X-Ray data source, behind a workspace-level
-      **"Plugin management"** setting that must be turned on via the AWS side (Console or
-      `aws grafana update-workspace-configuration`), separate from the `data_sources` list
-      and separate from Grafana's own roles. `aws_grafana_workspace` in
-      `infra/observability.tf` is tagged `owner = "meron"` and has no such argument set —
-      **this needs a Meron/Platform action**, not something available from inside Grafana
-      at any Grafana-side permission level. Once enabled: add the X-Ray data source, then
-      capture and commit one real trace as evidence.
+      sources` showed two CloudWatch connections and no X-Ray one, and adding it from the
+      catalog failed with "You do not have permission to install this plugin" — **even for
+      a confirmed Grafana org Admin** (checked: `Administration → Users`, role = `Admin`).
+      Not Grafana RBAC, then — Amazon Managed Grafana gates *all* plugin installs, including
+      AWS's own X-Ray data source, behind a workspace-level **"Plugin management"** setting,
+      separate from the `data_sources` list and separate from Grafana's own roles.
+      **Resolved directly, no Meron needed:** `aws grafana update-workspace-configuration
+      --workspace-id g-abb9c4666f --workspace-configuration
+      '{"plugins":{"pluginAdminEnabled":true}}'` succeeded under Rigbe's own `devops-g1` SSO
+      profile — the IAM permission for this was already there, it just isn't something
+      `aws_grafana_workspace` (Terraform) exposes as an argument, so it had to be a direct
+      API call, same pattern as the `pos-worker` cutover. `aws_grafana_workspace` in
+      `infra/observability.tf` is still tagged `owner = "meron"`, so worth telling them this
+      setting changed on their resource — not asking permission, just keeping them informed.
+      **Still open:** add the X-Ray data source in the UI now that installs are unblocked,
+      then capture and commit one real trace as evidence.
 - [ ] **Caching before/after (k6's "Report" section, `k6/README.md`) — DRI is Rigbe,**
       same file this line lives in. **Real blocker found while checking this, not assumed:**
       `infra/data.tf` provisions a real `aws_elasticache_replication_group` (Valkey), and
