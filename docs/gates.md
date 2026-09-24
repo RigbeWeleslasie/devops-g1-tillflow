@@ -26,8 +26,11 @@ Each gate passes with a PR + reproducible evidence. Blocked-if conditions are ha
 - [x] Branch ruleset `main protection` on `main`: require PR + 1 approval + require
       review from Code Owners + conversation resolution + block force-push/deletion
 - [ ] Add the mentor/trainer as a collaborator (Read if on org/Pro, else Write)
-- [ ] Confirm AWS account ID → note it for S3 bucket suffixes
-- [ ] Create the `prod` protected environment in GitHub (reviewers = platform DRI)
+- [x] Confirm AWS account ID → `240462142849`, used in every bucket suffix and role ARN
+- [x] Create the `prod` protected environment in GitHub (reviewers = platform DRI) — done
+      2026-09-22; proven by Deploy #52 and #56, which both paused for approval. Note the
+      gate is **per-job**: `apply` and `release` each request their own, and GitHub blocks
+      self-approval, so one person cannot complete a release alone.
 - [ ] Apply for GitHub Education Pack to move the repo back to private with enforcement
 
 ## G1 — Platform (D5)
@@ -264,3 +267,29 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
 destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend owned work.
+
+### Meron's G5 status (Platform — four of the six are Area 3)
+- [x] **Fresh-commit release — EXECUTED, 2026-09-24.** Deploy run #52: the first release
+      that actually went through the pipeline rather than a hand-run `update-service`.
+      Task definition 38 -> 39, sha `5cf6eae` -> `583ff63`, verified from outside the VPC.
+      `evidence/platform-delivery/g5-fresh-commit-release.md`.
+- [x] **Cost + cleanup model — done.** ~$285/month from live inventory, biggest lines NAT
+      ($66) and Fargate ($65); cleanup ordering, and the warning that `devops-g1` is a
+      prefix of `devops-g10` so a name-matched cleanup would delete another group's
+      Terraform state. `evidence/platform-delivery/g5-cost-and-cleanup.md`.
+- [x] **Pre-destroy snapshot — captured.** Alarm inventory (32), 72h of probe history and
+      28 timestamped Slack deliveries: the live state a destroy erases.
+      `evidence/platform-delivery/pre-destroy/`.
+- [ ] **Destroy -> rebuild — PLANNED, not executed.** Procedure, pre-flight checks and the
+      acceptance test written: `evidence/platform-delivery/g5-destroy-rebuild.md`. The
+      acceptance test is a tenant write returning 201, **not** `/health` — `/health`
+      touches no database and stays green through exactly the failure this has hit twice.
+- [ ] Individual defence — live viva, not a repo artifact.
+
+### Cross-cutting G5 items
+- [ ] **Traces not captured** (Area 4). X-Ray holds them — 99 `pos` and 56 `payments`
+      traces were visible in the console — but no artifact is committed, and
+      `evidence/README.md` is explicit that screenshots alone earn no credit.
+- [ ] **Restore reconciliation** (Area 2). `g4-restore-drill.md` records it as designed,
+      not executed: it needs `devops-g1/daraja` pointed at the M-Pesa stub, per the
+      finding in `evidence/payments-integrity/drills/README.md`.
