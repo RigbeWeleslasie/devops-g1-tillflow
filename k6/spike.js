@@ -12,7 +12,7 @@
 //   k6 run k6/spike.js -e BASE_URL=https://<api-gw-url> -e BASELINE_VUS=10
 import { check, sleep } from 'k6';
 import { bootstrapTenant, createSale, getSale, paySale } from './lib/pos.js';
-import { uniqueId } from './lib/config.js';
+import { uniqueId, SKIP_PAY } from './lib/config.js';
 
 const BASELINE_VUS = Number(__ENV.BASELINE_VUS || 10);
 const SPIKE_VUS = BASELINE_VUS * 10;
@@ -53,8 +53,10 @@ export default function (data) {
   }
   const sale = createRes.json();
 
-  const payRes = paySale(data, sale.id);
-  check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  if (!SKIP_PAY) {
+    const payRes = paySale(data, sale.id);
+    check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  }
 
   sleep(0.2);
 }

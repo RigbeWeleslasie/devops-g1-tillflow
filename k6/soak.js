@@ -10,7 +10,7 @@
 //     -e SOAK_DURATION=20m
 import { check, sleep } from 'k6';
 import { bootstrapTenant, createSale, getSale, paySale } from './lib/pos.js';
-import { THRESHOLDS, uniqueId } from './lib/config.js';
+import { THRESHOLDS, uniqueId, SKIP_PAY } from './lib/config.js';
 
 const SOAK_VUS = Number(__ENV.SOAK_VUS || 15); // placeholder -- see header
 const SOAK_DURATION = __ENV.SOAK_DURATION || '15m';
@@ -43,8 +43,10 @@ export default function (data) {
   }
   const sale = createRes.json();
 
-  const payRes = paySale(data, sale.id);
-  check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  if (!SKIP_PAY) {
+    const payRes = paySale(data, sale.id);
+    check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  }
 
   // A soak's whole point is steady, sustained pressure -- checking the sale
   // back adds a read alongside every write/pay pair for the duration, which
