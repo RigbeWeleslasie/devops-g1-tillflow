@@ -325,6 +325,12 @@ destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend own
       (`aws xray batch-get-traces --trace-ids 1-98771370-d73ccb29281626cea3fd08b9`), plus the
       exact reproduce command, alongside the screenshot and narrative in
       `g3-trace-capture.md`.
+- [~] **Money-path trace (sale -> payment -> callback) — first two legs captured, 2026-09-28.**
+      One trace, `1-8f6203f1-caad6b4b4221e00f162a333d`, holds `pos` and `payments` segments
+      (`evidence/reliability-ops/g3-money-path-trace.md` + `.json`). It also shows why the
+      callback leg cannot exist yet: Payments' Daraja OAuth call returns 400 (credentials
+      unset), so the charge ends `UNKNOWN`. **Open, not Rigbe's:** `devops-g1/daraja` pointed
+      at the M-Pesa stub (or valid sandbox credentials); after that, re-capture the callback.
 - [ ] **Restore reconciliation** (Area 2). `g4-restore-drill.md` records it as designed,
       not executed: it needs `devops-g1/daraja` pointed at the M-Pesa stub, per the
       finding in `evidence/payments-integrity/drills/README.md`.
