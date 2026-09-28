@@ -13,7 +13,7 @@
 // without editing the script.
 import { check, sleep } from 'k6';
 import { bootstrapTenant, createSale, getSale, paySale } from './lib/pos.js';
-import { THRESHOLDS, uniqueId } from './lib/config.js';
+import { THRESHOLDS, uniqueId, SKIP_PAY } from './lib/config.js';
 
 const STEP_VUS = Number(__ENV.STEP_VUS || 20); // VUs added per step
 const STEP_DURATION = __ENV.STEP_DURATION || '2m';
@@ -53,8 +53,10 @@ export default function (data) {
   }
   const sale = createRes.json();
 
-  const payRes = paySale(data, sale.id);
-  check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  if (!SKIP_PAY) {
+    const payRes = paySale(data, sale.id);
+    check(payRes, { 'POST /sales/{id}/pay -> 202': (r) => r.status === 202 });
+  }
 
   const getRes = getSale(data, sale.id);
   check(getRes, { 'GET /sales/{id} -> 200': (r) => r.status === 200 });

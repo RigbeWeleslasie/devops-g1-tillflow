@@ -23,6 +23,10 @@ on:
         description: Target base URL (blank = resolve the API Gateway edge from AWS)
         required: false
         type: string
+      env_overrides:
+        description: 'Extra k6 env, space-separated KEY=VALUE (e.g. "SKIP_PAY=true STEP_VUS=40 STEPS=6")'
+        required: false
+        type: string
       # Results are published as a run artifact only. Writing to the evidence
       # bucket would need s3:PutObject, and the only role this job can assume
       # (ci-plan) is ReadOnlyAccess with an explicit Deny on object reads --
@@ -126,6 +130,7 @@ jobs:
           # k6/README.md. Never point a load test at the real provider.
           BASE_URL: ${{ steps.target.outputs.url }}
           MPESA_ADAPTER: fake
+          K6_EXTRA: ${{ inputs.env_overrides }}
         run: |
           mkdir -p k6/results
           stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -135,11 +140,21 @@ jobs:
           # --summary-export writes the machine-readable summary the capacity
           # report is built from. The run's own thresholds decide pass/fail;
           # this workflow does not second-guess them.
+          # Optional scenario knobs (SKIP_PAY, STEP_VUS, ...). Read from an env var, not
+          # interpolated into the script, and each pair is validated, so an input can
+          # never become shell.
+          extra=()
+          for kv in $K6_EXTRA; do
+            [[ "$kv" =~ ^[A-Z_]+=[A-Za-z0-9._-]+$ ]] || { echo "::error::bad env_overrides entry: $kv"; exit 1; }
+            extra+=(-e "$kv")
+          done
+
           k6 run \
             --out "json=${out}" \
             --summary-export "k6/results/${{ inputs.scenario }}-${stamp}-summary.json" \
             -e BASE_URL="$BASE_URL" \
             -e MPESA_ADAPTER="$MPESA_ADAPTER" \
+            "${extra[@]}" \
             "k6/${{ inputs.scenario }}.js"
 
       # if: always() -- a threshold breach is the most interesting result there

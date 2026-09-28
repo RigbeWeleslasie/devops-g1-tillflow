@@ -22,6 +22,14 @@ export const THRESHOLDS = {
   checks: ['rate>0.99'],
 };
 
+// SKIP_PAY=true drops the POST /sales/{id}/pay step from baseline/spike/soak, so the
+// load is POS + its database only (POST /sales + GET /sales/{id}). Needed while
+// deployed Payments still calls the REAL Safaricom sandbox (docs/gates.md, the
+// money-path trace): every /pay would send a request to the real provider, which
+// this suite must never do (k6/README.md), and pay latency would then be the
+// provider's, not ours. Default false: the full flow is unchanged.
+export const SKIP_PAY = (__ENV.SKIP_PAY || 'false') === 'true';
+
 // A KES 250.00 product (whole shillings -- M-Pesa cannot carry cents,
 // ADR 0005/0006) so every VU's sale total is realistic and valid.
 export const PRODUCT_PRICE_MINOR = 25_000;

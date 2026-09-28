@@ -61,6 +61,23 @@ Two honest ways forward, and it is a decision, not a default: raise the throttle
 window (Terraform, Platform's file, a production change to revert afterwards), or run as-is
 and report the result as *"edge-limited at 50 rps"* rather than as service capacity.
 
+## Measuring POS capacity (not the edge, not the provider)
+
+Two things sit between a load test and a POS capacity number today, and both have a switch:
+
+- **The 50 rps edge throttle** (`api_throttle_rate` / `api_throttle_burst`, `infra/variables.tf`
+  -> `infra/edge.tf`). Raise it for the test window with `terraform apply -var` and put it back;
+  see `evidence/reliability-ops/` for the run that used it.
+- **Deployed Payments calls the real Safaricom sandbox** (the money-path trace,
+  `evidence/reliability-ops/g3-money-path-trace.md`). Every `/pay` in a load test would hit the
+  real provider, which this suite must never do, and pay latency would be the provider's. Set
+  `SKIP_PAY=true` and `baseline.js` / `spike.js` / `soak.js` drive `POST /sales` + `GET /sales/{id}`
+  only: POS and its database, nothing external.
+
+From the workflow, pass them in the `env_overrides` input, e.g. `SKIP_PAY=true STEP_VUS=40 STEPS=6`.
+Locally: `-e SKIP_PAY=true -e STEP_VUS=40`. Default (`SKIP_PAY` unset) is the full sale -> pay flow,
+unchanged, for once Payments points at the M-Pesa stub.
+
 ## Report (to `evidence/reliability-ops/` + `evidence/shared/`)
 Highest sustained RPS where SLOs hold · bottleneck · headroom · cost assumption ·
 caching before/after comparison · k6 JSON. **Not done yet** — needs a real run against a
