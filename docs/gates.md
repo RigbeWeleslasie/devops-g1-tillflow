@@ -283,16 +283,27 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       `ON CONFLICT`) makes 2.2 fail with *"2 callback rows for two identical deliveries"* —
       the test can fail. `local-stack.mts` stands up the real Payments HTTP surface, the real
       `DarajaAdapter` HTTP path, and the real stub over sockets (pg-mem for the DB only).
-- [ ] **AWS run still owed.** The local stack proves the invariants and the in-service prefix
-      strip, but **not** the edge (API Gateway → ALB) or the stub's callback delivery *through*
-      that edge. Same scripts, point `BASE_URL` at the edge, fill the X-Ray `trace_id` lines.
-- [~] **Stub deploy now coded, pending apply.** The blocker above was the stub not being
-      deployed as Payments' `DARAJA_BASE_URL` target. It is now a sidecar in the Payments task,
-      gated by `var.mpesa_stub_sidecar` (default `true`), reusing the Payments image with a
-      command override (`infra/ecs.tf`, `infra/service-mesh.tf`; the release job overlays the
-      digest onto it, `deploy.yml`). **Written, not yet applied** — needs `terraform apply` +
-      a Payments redeploy, which needs AWS credentials. Once live, run 2.1/2.2 against the
-      edge. This same stub also unblocks the restore reconciliation (Area 2).
+- [x] **Stub deployed (PR #60, applied by Meron 2026-09-29).** The stub runs as a sidecar in
+      the Payments task (task def 31, `var.mpesa_stub_sidecar`); `DARAJA_BASE_URL=localhost:9090`,
+      adapter still `daraja`, prod guard intact. Verified live in the 2.1 trace: OAuth and the STK
+      push both go to `localhost:9090`, not `sandbox.safaricom.co.ke`.
+- [x] **2.2 (callback replay / reorder) — EXECUTED AND TIMED against the deployed edge,
+      2026-09-29.** `https://ayh1c5n3xd…/api/payments`. The stub's duplicate callback traversed
+      the **public API Gateway edge** twice → one row, one transition, one `sale.paid`
+      (`publishedAt` set, so the outbox relay published); the late callback applied nothing
+      (**I3**). Traces confirmed via `batch-get-traces`. Wall-clock 4s. This is what the local run
+      could not prove: callback delivery *through* the edge.
+      `evidence/payments-integrity/drills/g4-2.2-callback-replay-20260929T081929Z.md`.
+- [~] **2.1 (uncertain payment) — steps 1–2 EXECUTED AND TIMED against the deployed edge,
+      2026-09-29; step 3 deployed-blocked.** A **real 10s network timeout** through the stub left
+      the charge `PENDING`, no CheckoutRequestID (**I5**); idempotent retry, `stkAttempts` 1
+      (**I2**). Step 3 (reconciler surfaces the charge, still PENDING) did not complete on the
+      deployed stack: `reconcileAfterMs=2min` (the charge was too new to be eligible) plus a
+      701-charge `PENDING` backlog from the PR #61 wrong-branch k6 run starving the oldest-first
+      reconciler. Step 3 is proven on the local stack; I5's core (no timeout→FAILED) is shown by
+      step 1 here. `evidence/payments-integrity/drills/g4-2.1-uncertain-payment-20260929T081516Z.md`.
+- [ ] **Owed follow-ups:** clear the PR #61 k6 backlog (also unblocks a clean step-3 re-run and
+      the restore reconciliation), then re-run 2.1 step 3 against the edge.
 
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
