@@ -163,7 +163,7 @@ locals {
       { name = "DEV_AUTH_ENABLED", value = "true" },
     ]
 
-    payments = [
+    payments = concat([
       { name = "MPESA_CALLBACK_BASE_URL", value = local.mpesa_callback_base_url },
       # `daraja`, never `fake`, when ENVIRONMENT=prod -- the service refuses to
       # start on the fake adapter in prod, which is the guard that keeps a
@@ -171,7 +171,9 @@ locals {
       { name = "MPESA_ADAPTER", value = var.mpesa_adapter },
       { name = "SALE_EVENTS_QUEUE_URL", value = aws_sqs_queue.main["sale-events"].url },
       { name = "AWS_REGION", value = var.aws_region },
-    ]
+      # With the stub sidecar on, the Daraja values are placeholder env, not the
+      # secret (local.daraja_stub_env). Off: they stay in `secrets`, below.
+    ], var.mpesa_stub_sidecar ? local.daraja_stub_env : [])
 
     commission = [
       { name = "POS_BASE_URL", value = local.service_url["pos"] },
@@ -196,6 +198,37 @@ locals {
 
   daraja_arn = aws_secretsmanager_secret.daraja.arn
 
+  # Two ways to give Payments its Daraja config, chosen by var.mpesa_stub_sidecar.
+  #
+  # Stub on: talk to the in-task stub at localhost:9090. The stub accepts any
+  # non-empty credential and speaks Daraja's wire protocol, so these are
+  # throwaway placeholders (not secrets) and match what the local drill stack
+  # uses; none of the `devops-g1/daraja` secret is read. Adapter stays `daraja`,
+  # so the fake-in-prod guard is untouched.
+  #
+  # Stub off: every value comes from the secret, exactly as before.
+  daraja_stub_env = [
+    { name = "DARAJA_BASE_URL", value = "http://localhost:9090" },
+    { name = "DARAJA_CONSUMER_KEY", value = "placeholder" },
+    { name = "DARAJA_CONSUMER_SECRET", value = "placeholder" },
+    { name = "DARAJA_SHORTCODE", value = "174379" },
+    { name = "DARAJA_PASSKEY", value = "placeholder" },
+    { name = "DARAJA_B2C_INITIATOR", value = "testapi" },
+    { name = "DARAJA_B2C_SECURITY_CREDENTIAL", value = "placeholder" },
+    { name = "DARAJA_B2C_SHORTCODE", value = "600000" },
+  ]
+
+  daraja_secret_refs = [
+    { name = "DARAJA_CONSUMER_KEY", valueFrom = "${local.daraja_arn}:consumer_key::" },
+    { name = "DARAJA_CONSUMER_SECRET", valueFrom = "${local.daraja_arn}:consumer_secret::" },
+    { name = "DARAJA_SHORTCODE", valueFrom = "${local.daraja_arn}:shortcode::" },
+    { name = "DARAJA_PASSKEY", valueFrom = "${local.daraja_arn}:passkey::" },
+    { name = "DARAJA_BASE_URL", valueFrom = "${local.daraja_arn}:base_url::" },
+    { name = "DARAJA_B2C_INITIATOR", valueFrom = "${local.daraja_arn}:initiator_name::" },
+    { name = "DARAJA_B2C_SECURITY_CREDENTIAL", valueFrom = "${local.daraja_arn}:security_credential::" },
+    { name = "DARAJA_B2C_SHORTCODE", valueFrom = "${local.daraja_arn}:b2c_shortcode::" },
+  ]
+
   service_secrets = {
     # The web shell authenticates browsers with a JWT; it makes no
     # service-to-service call and gets no service token.
@@ -207,18 +240,13 @@ locals {
       { name = "JWT_SECRET", valueFrom = "${aws_secretsmanager_secret.jwt.arn}:secret::" },
     ]
 
-    payments = [
+    # DARAJA_* come from the secret only when the stub sidecar is off; with it on
+    # they are placeholder env (local.daraja_stub_env) and would collide here --
+    # ECS rejects a name that is in both `environment` and `secrets`.
+    payments = concat([
       { name = "SERVICE_TOKEN", valueFrom = local.service_token_ref },
       { name = "DATABASE_URL", valueFrom = local.db_url_ref["payments"] },
-      { name = "DARAJA_CONSUMER_KEY", valueFrom = "${local.daraja_arn}:consumer_key::" },
-      { name = "DARAJA_CONSUMER_SECRET", valueFrom = "${local.daraja_arn}:consumer_secret::" },
-      { name = "DARAJA_SHORTCODE", valueFrom = "${local.daraja_arn}:shortcode::" },
-      { name = "DARAJA_PASSKEY", valueFrom = "${local.daraja_arn}:passkey::" },
-      { name = "DARAJA_BASE_URL", valueFrom = "${local.daraja_arn}:base_url::" },
-      { name = "DARAJA_B2C_INITIATOR", valueFrom = "${local.daraja_arn}:initiator_name::" },
-      { name = "DARAJA_B2C_SECURITY_CREDENTIAL", valueFrom = "${local.daraja_arn}:security_credential::" },
-      { name = "DARAJA_B2C_SHORTCODE", valueFrom = "${local.daraja_arn}:b2c_shortcode::" },
-    ]
+    ], var.mpesa_stub_sidecar ? [] : local.daraja_secret_refs)
 
     commission = [
       { name = "SERVICE_TOKEN", valueFrom = local.service_token_ref },

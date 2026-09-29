@@ -285,9 +285,14 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       `DarajaAdapter` HTTP path, and the real stub over sockets (pg-mem for the DB only).
 - [ ] **AWS run still owed.** The local stack proves the invariants and the in-service prefix
       strip, but **not** the edge (API Gateway → ALB) or the stub's callback delivery *through*
-      that edge. That run is blocked on the stub being deployed as the `DARAJA_BASE_URL`
-      target (Platform / Meron — `services/_shared/mpesa/Dockerfile` merged in #43; deploy is
-      theirs). Same scripts, point `BASE_URL` at the edge, fill the X-Ray `trace_id` lines.
+      that edge. Same scripts, point `BASE_URL` at the edge, fill the X-Ray `trace_id` lines.
+- [~] **Stub deploy now coded, pending apply.** The blocker above was the stub not being
+      deployed as Payments' `DARAJA_BASE_URL` target. It is now a sidecar in the Payments task,
+      gated by `var.mpesa_stub_sidecar` (default `true`), reusing the Payments image with a
+      command override (`infra/ecs.tf`, `infra/service-mesh.tf`; the release job overlays the
+      digest onto it, `deploy.yml`). **Written, not yet applied** — needs `terraform apply` +
+      a Payments redeploy, which needs AWS credentials. Once live, run 2.1/2.2 against the
+      edge. This same stub also unblocks the restore reconciliation (Area 2).
 
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,

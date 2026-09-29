@@ -347,6 +347,67 @@ locals {
   # Placeholder for the task definition only -- a task definition must name an
   # image even when the service is scaled to 0 and will never pull it.
   placeholder_image = "public.ecr.aws/docker/library/busybox:1.36"
+
+  # M-Pesa stub sidecar (Payments only), gated by var.mpesa_stub_sidecar. It
+  # reuses the Payments image -- which already bundles
+  # services/_shared/mpesa/dist -- with a command override, so there is nothing
+  # extra to build or push, and it can never drift from the code under test.
+  # Non-essential, exactly like the ADOT sidecar: if the stub dies the task keeps
+  # serving, and Payments treats an unreachable Daraja as a timeout (I5), not a
+  # crash. Read-only rootfs: the stub holds everything in memory. See
+  # var.mpesa_stub_sidecar for why this exists and when to turn it off.
+  mpesa_stub_container = {
+    name = "mpesa-stub"
+    # Same image as the Payments app container. In CI, Terraform applies with
+    # service_images={}, so this resolves to the busybox placeholder and the task
+    # sits at desired_count 0 -- it never runs. The deploy pipeline's release job
+    # overlays the real Payments digest onto this container by name (see
+    # .github/workflows/deploy.yml), exactly as it does for the app container.
+    image     = local.service_image["payments"] != "" ? local.service_image["payments"] : local.placeholder_image
+    essential = false
+    command   = ["node", "/app/services/_shared/mpesa/dist/stub-server.js"]
+
+    user                   = "1000:1000"
+    readonlyRootFilesystem = true
+    linuxParameters        = { initProcessEnabled = true }
+
+    environment = [
+      { name = "PORT", value = "9090" },
+    ]
+
+    portMappings = [{
+      containerPort = 9090
+      protocol      = "tcp"
+      name          = "mpesa-stub"
+    }]
+
+    healthCheck = {
+      command     = ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:9090/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 10
+    }
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.service["payments"].name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "mpesa-stub"
+      }
+    }
+  }
+
+  # Attach the stub only to Payments, only when enabled. It stays in the task
+  # definition even before Payments has a real image (the task is at
+  # desired_count 0 then, so it never runs) so that describe-task-definition
+  # carries it into the deploy, where the release job overlays the real digest.
+  # Every other service gets an empty list.
+  stub_sidecar = {
+    for s in local.services :
+    s => (s == "payments" && var.mpesa_stub_sidecar) ? [local.mpesa_stub_container] : []
+  }
 }
 
 resource "aws_ecs_task_definition" "service" {
@@ -365,7 +426,7 @@ resource "aws_ecs_task_definition" "service" {
     cpu_architecture        = "X86_64"
   }
 
-  container_definitions = jsonencode([
+  container_definitions = jsonencode(concat([
     # --- application -------------------------------------------------------
     {
       name  = each.key
@@ -476,7 +537,7 @@ resource "aws_ecs_task_definition" "service" {
         }
       }
     },
-  ])
+  ], local.stub_sidecar[each.key]))
 
   tags = {
     Name    = "${local.prefix}-${each.key}"

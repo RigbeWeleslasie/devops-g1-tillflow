@@ -152,6 +152,34 @@ variable "mpesa_adapter" {
   }
 }
 
+variable "mpesa_stub_sidecar" {
+  description = <<-EOT
+    Run the M-Pesa stub-server as a sidecar in the Payments task and point
+    Payments' Daraja adapter at it (`DARAJA_BASE_URL=http://localhost:9090`).
+
+    This is a sandbox aid, not a way around the `mpesa_adapter` guard: the
+    adapter stays `daraja` and the stub speaks Daraja's wire protocol, so the
+    `fake`-in-prod guard is untouched. It exists because ADR 0005's deterministic
+    scenarios -- a forced timeout (KES 103), a duplicate callback (KES 104) --
+    are what the G4 payment drills (2.1/2.2) and the restore reconciliation need,
+    and a REAL Daraja cannot be told to time out or to redeliver. The stub
+    accepts any non-empty credentials, so when this is on the `DARAJA_*` values
+    are throwaway placeholders in `environment`, not the `devops-g1/daraja`
+    secret.
+
+    The sidecar reuses the Payments image (it already bundles
+    `services/_shared/mpesa/dist`) with a command override, so there is no
+    separate image to build or push.
+
+    Set to `false` for a deployment that must talk to a real M-Pesa: Payments
+    then reads every `DARAJA_*` value from the `devops-g1/daraja` secret, exactly
+    as before. Default `true` because this deployment is sandbox-only and CI
+    applies with variable defaults.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "pos_worker_enabled" {
   description = <<-EOT
     Run the POS sale.paid consumer (infra/worker.tf).

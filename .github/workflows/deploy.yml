@@ -309,6 +309,12 @@ jobs:
                       [ (.environment // [])[] | select(.name != "IMAGE_DIGEST") ]
                       + [{ name: "IMAGE_DIGEST", value: $digest }]
                     )
+                # The M-Pesa stub sidecar (payments only) runs the SAME image as
+                # the app container -- it is the stub-server entrypoint bundled in
+                # it -- so it takes the same freshly built digest. Image only; it
+                # has no IMAGE_DIGEST env to refresh.
+                elif .name == "mpesa-stub" then
+                  .image = $img
                 else . end
               )
             )
