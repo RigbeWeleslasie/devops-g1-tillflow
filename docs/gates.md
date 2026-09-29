@@ -165,7 +165,7 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       narrative in the evidence file. **Still open:** the Grafana-side trace workflow
       (`docs/runbook.md`'s "pull `trace_id` from an alert, open it in Grafana") stays
       blocked on that plugin bug specifically.
-- [ ] **Caching before/after — the honest answer, not a to-do.** The review's own wording
+- [x] **Caching before/after — the honest answer, not a to-do.** The review's own wording
       (*"no caching before/after"*, listed alongside highest-RPS/bottleneck/headroom as one
       k6-derived measurement) only makes sense if it assumed cache-aside code already
       existed and just hadn't been benchmarked — a fair assumption from outside, since
