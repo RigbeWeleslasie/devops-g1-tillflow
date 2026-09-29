@@ -19,6 +19,43 @@ incident or painful surprise. Blameless. Newest first.
 ---
 
 
+### 2026-09-29 — a k6 run against the wrong branch sent ~40,000 real requests to Daraja's sandbox with the edge throttle raised
+- **Area:** k6 (workflow_dispatch), API Gateway throttle
+- **What happened:** Raised `api_throttle_rate`/`api_throttle_burst` from 50/100 to 1000/2000
+  (`terraform apply -var api_throttle_rate=1000 -var api_throttle_burst=2000`, plan reviewed
+  first) to measure POS capacity with `k6/baseline.js`'s new `SKIP_PAY=true` switch
+  (`feat/g3-k6-pos-capacity`), meant to drop the pay step so the load never reaches the real
+  M-Pesa provider. The workflow was triggered with "Use workflow from" left on `main`
+  instead of that branch. `main`'s `baseline.js`/`k6.yml` have neither `SKIP_PAY` nor the
+  `env_overrides` input, so the full, unmodified sale → pay → get flow ran under the raised
+  throttle for 12 minutes: ~40,287 real `POST /sales/{id}/pay` calls, each one synchronously
+  waiting on deployed Payments' real call to `sandbox.safaricom.co.ke/oauth/v1/generate`
+  (`evidence/reliability-ops/g3-money-path-trace.md` already showed this call fails with a
+  400 — unset `devops-g1/daraja` credentials — but that doesn't stop POS from sending the
+  request or Payments from making the outbound call each time).
+- **Impact:** No service outage — `checks` 100%, `http_req_failed` 0%, POS returned 202 on
+  every call, nothing crashed. But the run measured nothing useful (p95 650ms is Daraja's
+  real OAuth latency plus queueing under 100 VUs, not POS capacity) and, worse, sent real
+  load at a live external provider's sandbox for 12 minutes without meaning to — exactly
+  what `k6/README.md` says this suite must never do. Checked afterward, not assumed: one
+  fresh real `/pay` call post-run traced to the same 400 with `"throttle": false` in the
+  X-Ray span — the same pre-existing credentials failure, not a new rate-limit/lockout
+  response, so nothing appears to have broken on Safaricom's side. The throttle itself was
+  reverted to 50/100 and verified live both times it was raised.
+- **Root cause:** `workflow_dispatch`'s "Use workflow from" branch selector defaults to the
+  repository's default branch and is easy to leave unchanged; nothing in the run confirms
+  which branch's script actually executed until the results come back and look wrong.
+- **Fix:** None shipped yet — see Prevention.
+- **Prevention:** Two real options, not done here: (1) the workflow could echo which
+  ref/commit it checked out into the job summary before running k6, so a wrong-branch run
+  is visible in ~30 seconds instead of after the full run finishes; (2) once
+  `feat/g3-k6-pos-capacity` merges, `SKIP_PAY`'s default could flip to `true` for any
+  scenario run against `MPESA_ADAPTER=daraja`-backed Payments, so a plain "run baseline"
+  can't accidentally hit the real provider regardless of which branch or env_overrides was
+  used. Neither is implemented; naming them here so they don't get lost.
+- **Owner:** Rigbe (ran it); flagging to Meron/Nebyat since it's their infra/provider
+  relationship that took the traffic, not mine.
+
 ### 2026-09-21 — the edge throttles at 50 rps, so load tests measure the throttle and trip the canary
 - **Area:** infra (API Gateway stage), k6, the uptime SLI
 - **What happened:** Verifying the new SLO dashboard, 28-day uptime read 98.667%. The alarm
