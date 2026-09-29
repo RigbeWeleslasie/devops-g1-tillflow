@@ -22,11 +22,19 @@ the deployed Payments must be pointed at the **M-Pesa stub-server**, not at Safa
 
 That is what ADR 0005 always intended ("a tiny HTTP stub service") and what
 `k6/README.md` means by "never point BASE_URL at a target running `MPESA_ADAPTER=daraja`"
-— it means the sandbox, not the adapter. The stub existed as code but nothing could
-build it, which is why every STK push from the deployed Payments timed out and why the
-k6 full-flow run produced 115 stuck charges. `services/_shared/mpesa/Dockerfile` is the
-missing piece. Deploying it (ECS task or a sidecar in the payments task with
-`DARAJA_BASE_URL=http://localhost:9090`) is Platform's; the image is ours.
+— it means the sandbox, not the adapter. The stub existed as code but nothing deployed
+it, which is why every STK push from the deployed Payments timed out and why the k6
+full-flow run produced 115 stuck charges.
+
+**Now deployed.** The stub runs as a **sidecar in the Payments task**, gated by
+`var.mpesa_stub_sidecar` (default `true`) in `infra/`. It reuses the Payments image — which
+already bundles `services/_shared/mpesa/dist` — with a command override, so there is no
+separate image to build. When on, Payments' `DARAJA_BASE_URL` is `http://localhost:9090`
+and the `DARAJA_*` credentials are throwaway placeholders in `environment` (the stub accepts
+anything), so nothing has to be written into `devops-g1/daraja`. The adapter stays `daraja`,
+so the `prod` guard is untouched. Set the variable `false` for a real-M-Pesa deployment;
+Payments then reads every value from the secret. This takes effect on `terraform apply` +
+a Payments redeploy.
 
 **Setting Safaricom sandbox credentials would not unblock these drills.** It would make
 the money path work against the real sandbox — worth doing for the contract test — but
