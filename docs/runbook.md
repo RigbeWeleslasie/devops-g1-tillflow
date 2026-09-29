@@ -67,6 +67,23 @@ running (`commission`/`payments` scheduled task healthy).
    `GET /admin/pending` lists what is still waiting and how many looks it has had.
 4. If Daraja sandbox is down: leave charges PENDING, post status, wait. No manual state edits.
 5. Recovery signal: pending-age p95 back < threshold, backlog drains to 0.
+6. **Clearing load-test residue (not real charges).** A load test can leave thousands of
+   charges that are `PENDING` with no `CheckoutRequestID` — the push never got a reference,
+   so no callback can ever match and no money moved. They starve the reconciler
+   (oldest-first) and swamp `/admin/pending`. Purge them, **dry run first**:
+   ```bash
+   # dry run (default): reports how many WOULD be deleted, deletes nothing
+   curl -sS -X POST "$BASE_URL/api/payments/admin/charges/purge-abandoned" \
+     -H "x-service-token: $SERVICE_TOKEN" -H 'content-type: application/json' \
+     -d '{"olderThanMinutes":60}'
+   # confirm the count, then delete
+   curl -sS -X POST "$BASE_URL/api/payments/admin/charges/purge-abandoned" \
+     -H "x-service-token: $SERVICE_TOKEN" -H 'content-type: application/json' \
+     -d '{"dryRun":false,"olderThanMinutes":60}'
+   ```
+   It only ever deletes `PENDING` + no-`CheckoutRequestID` + not-held charges older than the
+   cutoff — never a charge a callback could still resolve. Scope to specific test tenants with
+   `"tenantIds":[...]`.
 **Proof (G4):** force scenario `...03`, show retry creates no second charge, show trace.
 
 ### 2.2 Callback replay / reorder
