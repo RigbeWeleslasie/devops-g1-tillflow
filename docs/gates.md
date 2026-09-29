@@ -200,6 +200,13 @@ Grafana uptime/SLO/budget panels; traces; k6 envelope; Slack firing/recovery.
       Grafana saturation-panel correlation confirmed for the soak window too — latency and
       CPU/memory rise and fall exactly with the run, queue age flat at 0
       (`g4-soak-grafana-correlation.png`).
+- [x] **The real POS capacity number, isolated from both confounds — 2026-09-29.** The
+      edge-limited baseline/spike above measured the throttle; this run raised it
+      temporarily and used `SKIP_PAY=true` to remove Payments/Daraja from the load too,
+      verified clean of Payments traffic via X-Ray for the whole run, not assumed. Result:
+      **all three thresholds pass at 160 VUs** — `checks` 100%, `http_req_failed` 0%,
+      `p(95)` 291ms, ~221 req/s sustained. The knee sits above 160 VUs; not found in this
+      run. `evidence/reliability-ops/k6-baseline-pos-only-capacity.md`.
 
 ## G4 — Recover (D13)
 Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsal.
