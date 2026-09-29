@@ -19,6 +19,44 @@ incident or painful surprise. Blameless. Newest first.
 ---
 
 
+### 2026-09-29 — pos-worker was on busybox again after the G5 rebuild, with a real 898-message backlog
+- **Area:** infra (ECS task definitions), services/pos (worker)
+- **What happened:** Capturing a passing money-path trace (the review's one remaining G3
+  ask), a real sale's payment succeeded on Payments' side — charge `PAID`, callback
+  applied, `sale.paid` published to the outbox — but the POS sale itself sat `UNPAID`
+  indefinitely. `devops-g1-pos-worker` was `0/0`, and its registered task definition
+  (`:13`) still pointed at `public.ecr.aws/docker/library/busybox` — the same bug as the
+  2026-09-19 entry below, recurring because `docs/runbook.md` §3's destroy/rebuild
+  procedure always starts every service at busybox on the first apply by design, and
+  nobody re-ran the `pos-worker` cutover after the 2026-09-24 G5 rebuild.
+- **Impact:** A real backlog of **898 messages** on `devops-g1-sale-events` — real
+  `sale.paid` events from every test/drill run since the rebuild, with nowhere to go.
+  Every sale behind that backlog was showing `UNPAID` in POS despite its charge being
+  genuinely `PAID` in Payments.
+- **Root cause:** Same as 2026-09-19 — `aws_ecs_service`'s `ignore_changes =
+  [task_definition, desired_count]` means Terraform will never automatically cut a
+  service over to a newer, correct revision, and nothing alerts when the *registered*
+  revision itself (not just the running one) is wrong. This time it wasn't a stale local
+  `terraform.tfvars` — it's that the rebuild procedure's own first-apply step
+  (`-var 'service_images={}'`) is *supposed* to leave every service at busybox
+  momentarily, and the second half of the procedure (a real deploy per service) either
+  never covered `pos-worker` or the deploy didn't stick.
+- **Fix:** Registered a corrected task definition
+  (`devops-g1-pos-worker:20`, same `command: ["node","dist/worker.js"]`, image swapped to
+  the real `pos` digest confirmed via a live `/version` call) and cut the service over
+  directly (`aws ecs register-task-definition` + `update-service` — the same pattern the
+  original fix used, since Terraform structurally can't do this cutover). Backlog drained
+  898 → 0 within about a minute of the worker coming back up. Full writeup:
+  `evidence/reliability-ops/g3-money-path-trace-passing.md`.
+- **Prevention:** Still none shipped — this is the second occurrence of the exact same
+  class of bug the 2026-09-19 entry's "Prevention" line already flagged as unaddressed.
+  `infra/scripts/preflight.sh` catches a *local* stale-tfvars mismatch before a human
+  applies, but nothing catches a service silently running the wrong image with no human
+  in the loop at all, which is what actually happened here (post-rebuild, unattended).
+  A real fix would be a CloudWatch alarm or scheduled check comparing each service's
+  running `taskDefinition` digest against its registered/expected one — not built.
+- **Owner:** Rigbe (found and fixed while doing G3 work; `pos-worker` is Track A/POS)
+
 ### 2026-09-29 — a k6 run against the wrong branch sent ~40,000 real requests to Daraja's sandbox with the edge throttle raised
 - **Area:** k6 (workflow_dispatch), API Gateway throttle
 - **What happened:** Raised `api_throttle_rate`/`api_throttle_burst` from 50/100 to 1000/2000
