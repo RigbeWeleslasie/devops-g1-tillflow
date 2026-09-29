@@ -294,16 +294,17 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       (**I3**). Traces confirmed via `batch-get-traces`. Wall-clock 4s. This is what the local run
       could not prove: callback delivery *through* the edge.
       `evidence/payments-integrity/drills/g4-2.2-callback-replay-20260929T081929Z.md`.
-- [~] **2.1 (uncertain payment) — steps 1–2 EXECUTED AND TIMED against the deployed edge,
-      2026-09-29; step 3 deployed-blocked.** A **real 10s network timeout** through the stub left
-      the charge `PENDING`, no CheckoutRequestID (**I5**); idempotent retry, `stkAttempts` 1
-      (**I2**). Step 3 (reconciler surfaces the charge, still PENDING) did not complete on the
-      deployed stack: `reconcileAfterMs=2min` (the charge was too new to be eligible) plus a
-      701-charge `PENDING` backlog from the PR #61 wrong-branch k6 run starving the oldest-first
-      reconciler. Step 3 is proven on the local stack; I5's core (no timeout→FAILED) is shown by
-      step 1 here. `evidence/payments-integrity/drills/g4-2.1-uncertain-payment-20260929T081516Z.md`.
-- [ ] **Owed follow-ups:** clear the PR #61 k6 backlog (also unblocks a clean step-3 re-run and
-      the restore reconciliation), then re-run 2.1 step 3 against the edge.
+- [x] **2.1 (uncertain payment) — EXECUTED AND TIMED against the deployed edge, 2026-09-29.**
+      Steps 1–2: a **real 10s network timeout** through the stub left the charge `PENDING`, no
+      CheckoutRequestID (**I5**); idempotent retry, `stkAttempts` 1 (**I2**) —
+      `drills/g4-2.1-uncertain-payment-20260929T081516Z.md`. Step 3 (reconciler surfaces the
+      charge, still PENDING) was backlog-blocked on the first run; after the purge (below) it
+      **completed on the edge**: 12 `unqueryable` reconcile passes, never auto-failed, surfaced
+      in `/admin/pending` still `PENDING` — `drills/g4-2.1-step3-deployed-20260929T121850Z.md`.
+- [x] **Backlog purged.** The 40,291-charge `PENDING` backlog from the PR #61 wrong-branch k6
+      run (no CheckoutRequestID → no callback can match → no money moved) was cleared via the
+      team-approved `purge-abandoned` route, dry-run before/after recorded:
+      `drills/g4-purge-abandoned-backlog-20260929.md`. Backlog 40,291 → 0.
 
 ## G5 — Release (D14)
 Fresh-commit release, live proof, evidence pack, individual defences, cost/cleanup,
@@ -347,6 +348,10 @@ destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend own
       callback leg cannot exist yet: Payments' Daraja OAuth call returns 400 (credentials
       unset), so the charge ends `UNKNOWN`. **Open, not Rigbe's:** `devops-g1/daraja` pointed
       at the M-Pesa stub (or valid sandbox credentials); after that, re-capture the callback.
-- [ ] **Restore reconciliation** (Area 2). `g4-restore-drill.md` records it as designed,
-      not executed: it needs `devops-g1/daraja` pointed at the M-Pesa stub, per the
-      finding in `evidence/payments-integrity/drills/README.md`.
+- [x] **Restore reconciliation** (runbook §2.5 step 4) — **executed on the live system,
+      2026-09-29**, now that `payments` is up and pointed at the stub. The reconciler queries the
+      provider for `PENDING` charges and applies its answer (terminal path proven live by the 2.2
+      `stkQuery` trace; unqueryable/never-auto-fail path by the 2.1 step-3 edge run) —
+      `evidence/payments-integrity/g4-restore-reconciliation.md`. **Caveat, kept deliberately:**
+      the stub is stateless, so this proves the mechanism against the live system, not a faithful
+      "provider outlived our backup" scenario, which needs a stateful/real sandbox.
