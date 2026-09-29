@@ -355,12 +355,16 @@ destroy/rebuild. **Blocked if:** cannot reproduce, or a member cannot defend own
       (`aws xray batch-get-traces --trace-ids 1-98771370-d73ccb29281626cea3fd08b9`), plus the
       exact reproduce command, alongside the screenshot and narrative in
       `g3-trace-capture.md`.
-- [~] **Money-path trace (sale -> payment -> callback) — first two legs captured, 2026-09-28.**
-      One trace, `1-8f6203f1-caad6b4b4221e00f162a333d`, holds `pos` and `payments` segments
-      (`evidence/reliability-ops/g3-money-path-trace.md` + `.json`). It also shows why the
-      callback leg cannot exist yet: Payments' Daraja OAuth call returns 400 (credentials
-      unset), so the charge ends `UNKNOWN`. **Open, not Rigbe's:** `devops-g1/daraja` pointed
-      at the M-Pesa stub (or valid sandbox credentials); after that, re-capture the callback.
+- [x] **Money-path trace (sale -> payment -> callback) — fully passing, 2026-09-29.** The
+      2026-09-28 trace (`g3-money-path-trace.md`) showed the money path failing — real
+      Daraja OAuth 400, charge `UNKNOWN` — because `devops-g1/daraja` wasn't pointed at
+      the stub yet. Now that it is: a real sale (`36206098-...`) went `pos` → `payments`
+      **201** → stub OAuth **200** → stub STK push **200** → stub callback **200** → charge
+      `PAID` → outbox `sale.paid` published → POS sale itself `PAID`. Two traces, both
+      clean, no error/fault anywhere: `evidence/reliability-ops/g3-money-path-trace-passing.md`
+      + `.json` × 2. Finding this also surfaced and fixed a real bug —
+      `pos-worker` was back on `busybox` post-rebuild with a real 898-message backlog,
+      drained to 0 after the fix (`docs/scar-log.md`, 2026-09-29).
 - [x] **Restore reconciliation** (runbook §2.5 step 4) — **executed on the live system,
       2026-09-29**, now that `payments` is up and pointed at the stub. The reconciler queries the
       provider for `PENDING` charges and applies its answer (terminal path proven live by the 2.2
