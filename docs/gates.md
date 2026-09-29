@@ -58,8 +58,11 @@ Sale → STK callback → paid; close → commission → B2C; state/idempotency 
 - [x] Integration with a real Payments service — proven, not asserted:
       `tests/integration/` wires POS and Payments together with only Daraja faked
       (the `tenantId`/`customerMsisdn` mismatch it caught is in `docs/scar-log.md`)
-- [ ] Not yet done: real Postgres/RDS run (tests are pg-mem-backed only)
-- [ ] Not yet done: deployed to ECS / exercised through the pipeline
+- [x] **Real Postgres/RDS run — done.** `pos` is deployed (2/2) and every write goes through
+      real RDS, not pg-mem — a real `POST /tenants` through the live edge returns 201 against
+      it (`evidence/reliability-ops/g3-money-path-trace.md` and every k6 run since).
+- [x] **Deployed to ECS / exercised through the pipeline — done.** Live on the rebuilt
+      stack; this line was stale from before G4/G5, left unchecked after the work moved on.
 
 ### Track B — Payments + integrity (Nebyat): status
 - [x] `services/payments` — sole owner of Daraja. STK push, callbacks, transaction query,
@@ -76,9 +79,12 @@ Sale → STK callback → paid; close → commission → B2C; state/idempotency 
       reorder, amount mismatch (hold), unverifiable B2C amount, insufficient float
 - [x] Both G2 flows proven across the real seams in `tests/integration/`:
       sale → STK callback → paid, and close → commission → B2C
-- [ ] Not yet done: real Postgres/RDS run; Daraja sandbox credentials in
-      `devops-g1/daraja` (the contract test skips without them)
-- [ ] Not yet done: deployed to ECS / exercised through the pipeline
+- [x] **Real Postgres/RDS run — done.** `payments` is deployed (1/1, with the M-Pesa stub
+      sidecar) and writes real charge/ledger rows to real RDS, not pg-mem — see
+      `evidence/reliability-ops/g3-money-path-trace.md` (the `pg.query:INSERT`/`UPDATE`
+      spans) and Nebyat's deployed-edge drills (PR #62).
+- [x] **Deployed to ECS / exercised through the pipeline — done.** Live on the rebuilt
+      stack; this line was stale from before G4/G5, left unchecked after the work moved on.
 
 ### Cross-cutting G2 blockers — status
 - **Happy path only:** ☑ cleared. Every success path has a failure path beside it on both
@@ -222,9 +228,9 @@ Failure drills, DLQ recovery, broken-release rollback, restore, runbook rehearsa
       screenshot confirming latency/CPU/memory rise and fall with the run window and
       queue age stays flat. The rest of the k6 envelope (`baseline.js`/`spike.js`, G3's own
       gap) is also now done — see the G3 section above. This closes 2.9 in full.
-- [ ] **Not Rigbe's to execute:** 2.4/2.5/2.6 (Meron) — see the per-owner sections below
-      and `docs/g4-plan.md` §2 for the ownership split and why. 2.1/2.2 (Nebyat) are now
-      done — see Nebyat's status below.
+- [x] **2.4/2.5/2.6 (Meron) and 2.1/2.2 (Nebyat) — all done**, see the per-owner sections
+      below. This line was a stale ownership cross-reference from before those landed;
+      every drill it points at is ticked further down this file.
 
 ### Meron's G4 status (2.4, 2.5, 2.6 — platform drills)
 - [x] Drill procedures written with exact commands, pre/post capture, fill-in timelines and
